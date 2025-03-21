@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 import sys
 import google.generativeai as genai
+import concurrent.futures
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
@@ -39,7 +40,7 @@ def load_environment():
     model = os.getenv("MODEL", "gemini-1.5-flash")
     
     # Log only the relevant environment variables based on model
-    if model in ["gemini-1.5-flash", "gemini-2.0-flash"]:
+    if model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
         # Only log Google-related variables for Gemini models
         for key in os.environ:
             if key.startswith("GOOGLE_"):
@@ -63,7 +64,13 @@ class GeminiVisionWrapper:
         },
         "gemini-2.0-flash": {
             "name": "gemini-2.0-flash",
-            "description": "Latest version with improved capabilities",
+            "description": "Latest version with improved capabilities and function calling",
+            "input_cost": 0.000035,  # per 1K tokens
+            "output_cost": 0.000070,  # per 1K tokens
+        },
+        "gemini-2.0-flash-lite": {
+            "name": "gemini-2.0-flash-lite",
+            "description": "Cost-efficient version of Gemini 2.0 Flash with lower latency",
             "input_cost": 0.000035,  # per 1K tokens
             "output_cost": 0.000070,  # per 1K tokens
         }
@@ -356,8 +363,11 @@ def classify_document_with_vision(file_path, prompt_template, api):
             logger.error(f"❌ Could not extract images from {file_path}")
             return None
         
-        # Prepare messages with images
-        content = [{"type": "text", "text": f"Please analyze this document from {file_path}:"}]
+        # Extract the filename from the path
+        filename = os.path.basename(file_path)
+        
+        # Prepare messages with images and include the filename
+        content = [{"type": "text", "text": f"Please analyze this document with filename '{filename}' from {file_path}:"}]
         
         # Add each page as an image
         for i, img in enumerate(base64_images):
@@ -378,7 +388,7 @@ def classify_document_with_vision(file_path, prompt_template, api):
         logger.info(f"🔤 Using MAX_OUTPUT_TOKENS={max_tokens} from environment")
         
         # Make API call
-        logger.info(f"🔍 Sending {len(base64_images)} pages to Gemini Vision API")
+        logger.info(f"🔍 Sending {len(base64_images)} pages to Gemini Vision API with filename: {filename}")
         response = api.vision_chat_completion(messages, max_retries=2, max_tokens=max_tokens)
         
         if "error" in response:
@@ -388,7 +398,7 @@ def classify_document_with_vision(file_path, prompt_template, api):
         # Extract response content
         try:
             response_content = response["choices"][0]["message"]["content"]
-            logger.info(f"✅ Received response for {os.path.basename(file_path)}")
+            logger.info(f"✅ Received response for {filename}")
             
             # Try to extract classification from response
             classification = None
@@ -401,6 +411,7 @@ def classify_document_with_vision(file_path, prompt_template, api):
             
             return {
                 "file": file_path,
+                "filename": filename,
                 "response": response_content,
                 "classification": classification,
                 "response_time": response.get("response_time", 0),
@@ -451,6 +462,7 @@ def calculate_accuracy(results, validation_data):
         
         detailed_results.append({
             'file': os.path.basename(file_path),
+            'filename': result.get('filename', os.path.basename(file_path)),
             'predicted': predicted,
             'expected': expected,
             'correct': is_correct,
@@ -478,7 +490,37 @@ def test_documents_with_vision():
             return azure_test()
         except ImportError:
             raise ImportError("❌ Azure OpenAI implementation not found. Please ensure vision_doc_classifier.py is available.")
-    elif model in ["gemini-1.5-flash", "gemini-2.0-flash"]:
+    elif model in ["gemini-1.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]:
+        # Let user choose between Gemini models - ALWAYS show this menu now
+        print("\n===== 🤖 MODEL SELECTION =====")
+        print(f"Current model from environment: {model}")
+        print("1️⃣ Gemini 1.5 Flash - Fast and efficient model for vision tasks")
+        print("2️⃣ Gemini 2.0 Flash - Latest version with improved capabilities and function calling")
+        print("3️⃣ Gemini 2.0 Flash Lite - Cost-efficient version of Gemini 2.0 Flash with lower latency")
+        print("===============================\n")
+        
+        while True:
+            try:
+                model_choice = input(f"🔢 Choose a model (1, 2, or 3, default is based on environment [{model}]): ")
+                if not model_choice:
+                    # Keep the model from environment
+                    break
+                elif model_choice == "1":
+                    model = "gemini-1.5-flash"
+                    break
+                elif model_choice == "2":
+                    model = "gemini-2.0-flash"
+                    break
+                elif model_choice == "3":
+                    model = "gemini-2.0-flash-lite"
+                    break
+                else:
+                    print("⚠️ Please enter 1, 2, or 3.")
+            except ValueError:
+                print("⚠️ Please enter a valid option.")
+        
+        print(f"🤖 Selected model: {model}")
+        
         # Use Gemini implementation
         pages_no = int(os.getenv("PAGES_NO", "2"))
         max_output_tokens = int(os.getenv("MAX_OUTPUT_TOKENS", "4000"))
@@ -514,6 +556,33 @@ def test_documents_with_vision():
                         print(f"⚠️ Please enter a number between 1 and {len(validation_data)}, or 'all'.")
             except ValueError:
                 print("⚠️ Please enter a valid number or 'all'.")
+        
+        # Ask user for concurrency level
+        while True:
+            try:
+                concurrency_input = input("🔄 How many documents would you like to process concurrently? (1-10, default: 1): ")
+                if not concurrency_input:
+                    concurrency = 1
+                    break
+                else:
+                    concurrency = int(concurrency_input)
+                    if 1 <= concurrency <= 10:
+                        break
+                    else:
+                        print("⚠️ Please enter a number between 1 and 10.")
+            except ValueError:
+                print("⚠️ Please enter a valid number.")
+        
+        print(f"🔄 Processing documents with concurrency level: {concurrency}")
+        
+        # Warn about potential rate limiting with high concurrency
+        if concurrency > 4:
+            print("⚠️ Warning: High concurrency levels may cause rate limiting from the API.")
+            print("   If you encounter errors, try reducing the concurrency level.")
+            confirm = input("   Continue with this setting? (y/n): ")
+            if confirm.lower() != 'y':
+                print("🛑 Exiting. Please restart the script with a lower concurrency level.")
+                return
         
         # Load prompt template
         try:
@@ -553,9 +622,10 @@ def test_documents_with_vision():
             else:
                 # For numbers >= 10, convert each digit to emoji
                 return ''.join(number_emojis[int(digit)] for digit in str(num))
-        
-        # Process each document
-        for idx, (_, row) in enumerate(validation_data.iterrows(), 1):
+
+        # Helper function for processing a single document
+        def process_document(item):
+            idx, (_, row) = item
             file_path = row['file_path']
             expected_classification = row['classification']
             
@@ -567,14 +637,12 @@ def test_documents_with_vision():
             # Skip if file doesn't exist
             if not os.path.exists(file_path):
                 logger.error(f"❌ File not found: {file_path}")
-                failed_calls += 1
-                continue
+                return {"status": "failed", "reason": "file_not_found"}
             
             # Skip if not a PDF
             if not file_path.lower().endswith('.pdf'):
                 logger.error(f"❌ Not a PDF file: {file_path}")
-                failed_calls += 1
-                continue
+                return {"status": "failed", "reason": "not_pdf"}
             
             # Classify document
             result = classify_document_with_vision(file_path, prompt_template, api)
@@ -591,26 +659,61 @@ def test_documents_with_vision():
                 if predicted:
                     correct_emoji = "🟢" if is_correct else "🔴"
                     logger.info(f"{correct_emoji} Classification: {predicted} (Expected: {expected_classification})")
-                    
-                    # Track retry statistics
-                    retries = result.get('retries', 0)
-                    if retries > 0:
-                        retry_success_counts[retries] = retry_success_counts.get(retries, 0) + 1
-                    
-                    successful_calls += 1
+                    return {"status": "success", "result": result}
                 else:
                     logger.warning(f"⚠️ No classification provided for {file_path}")
-                    failed_calls += 1
-                
-                results.append(result)
-                total_api_time += result.get('response_time', 0)
-                total_cost += result.get('cost', 0)
-                
-                # Add a small delay to avoid rate limiting
-                time.sleep(1)
+                    return {"status": "failed", "reason": "no_classification"}
             else:
                 logger.error(f"❌ Failed to classify {file_path}")
-                failed_calls += 1
+                return {"status": "failed", "reason": "classification_error"}
+                
+        # Process documents based on concurrency level
+        document_items = list(enumerate(validation_data.iterrows(), 1))
+        
+        if concurrency > 1:
+            # Concurrent processing
+            with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+                # Submit tasks and collect futures
+                futures = {executor.submit(process_document, item): item for item in document_items}
+                
+                # Process results as they complete
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        data = future.result()
+                        if data["status"] == "success":
+                            results.append(data["result"])
+                            successful_calls += 1
+                            total_api_time += data["result"].get('response_time', 0)
+                            total_cost += data["result"].get('cost', 0)
+                            
+                            # Track retry statistics
+                            retries = data["result"].get('retries', 0)
+                            if retries > 0:
+                                retry_success_counts[retries] = retry_success_counts.get(retries, 0) + 1
+                        else:
+                            failed_calls += 1
+                    except Exception as e:
+                        logger.error(f"❌ Error in processing thread: {str(e)}")
+                        failed_calls += 1
+        else:
+            # Sequential processing (original implementation)
+            for item in document_items:
+                data = process_document(item)
+                if data["status"] == "success":
+                    results.append(data["result"])
+                    successful_calls += 1
+                    total_api_time += data["result"].get('response_time', 0)
+                    total_cost += data["result"].get('cost', 0)
+                    
+                    # Track retry statistics
+                    retries = data["result"].get('retries', 0)
+                    if retries > 0:
+                        retry_success_counts[retries] = retry_success_counts.get(retries, 0) + 1
+                else:
+                    failed_calls += 1
+                
+                # Add a small delay to avoid rate limiting (only in sequential mode)
+                time.sleep(1)
         
         total_time = time.time() - start_time
         
@@ -652,6 +755,7 @@ def test_documents_with_vision():
                 "total_run_time": total_time,
                 "total_cost": total_cost,
                 "total_tokens": cost_summary["total_tokens"],
+                "concurrency": concurrency,
                 "timestamp": timestamp
             },
             "detailed_results": detailed_results,
@@ -678,6 +782,7 @@ def test_documents_with_vision():
                 "average_response_time": avg_response_time,
                 "total_cost": total_cost,
                 "total_tokens": cost_summary["total_tokens"],
+                "concurrency": concurrency,
             },
             "prompt": prompt_template
         }
@@ -692,6 +797,7 @@ def test_documents_with_vision():
         print(f"🤖 Model: {api.model_name}")
         print(f"📊 Accuracy: {accuracy:.2%} ({correct_count}/{total_count})")
         print(f"🔄 Completion: {completion_percentage:.2f}% ({successful_calls}/{total_attempts})")
+        print(f"🔄 Concurrency level: {concurrency}")
         print(f"🔁 Successful retries: {retry_percentage:.2f}% ({sum(retry_success_counts.values())}/{successful_calls})")
         print(f"   - Retry 1: {retry_success_counts.get(1, 0)}")
         print(f"   - Retry 2: {retry_success_counts.get(2, 0)}")
@@ -711,12 +817,12 @@ def test_documents_with_vision():
         
         for detail in detailed_results:
             correct_mark = "✅" if detail['correct'] else "❌"
-            print(f"{detail['file']:<40} | {detail['predicted']:<20} | {detail['expected']:<20} | {correct_mark:<10} | {detail['response_time']:.2f} | ${detail['cost']:.6f}")
+            print(f"{detail['filename']:<40} | {detail['predicted']:<20} | {detail['expected']:<20} | {correct_mark:<10} | {detail['response_time']:.2f} | ${detail['cost']:.6f}")
         
         logger.info(f"✅ Processed {len(results)} documents. Results saved to {results_filename}")
         return output
     else:
-        raise ValueError(f"❌ Invalid model: {model}. Must be one of: gpt-4o, gpt-4o-mini, gemini-1.5-flash, gemini-2.0-flash")
+        raise ValueError(f"❌ Invalid model: {model}. Must be one of: gpt-4o, gpt-4o-mini, gemini-1.5-flash, gemini-2.0-flash, gemini-2.0-flash-lite")
 
 if __name__ == "__main__":
     test_documents_with_vision() 

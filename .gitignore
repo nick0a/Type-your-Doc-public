@@ -24,12 +24,17 @@ wheels/
 venv/
 ENV/
 env/
+.env
+.venv
+env.bak/
+venv.bak/
 
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+*.code-workspace
 
 # OS
 .DS_Store
@@ -40,12 +45,27 @@ env/
 ehthumbs.db
 Thumbs.db
 
+# Node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
 # Project specific
 *.log
 classification_results/
 optimization_results/
-*.json
-!prompt_template.json
 
-# Environment variables
+# Result files - ignore all JSON result files but keep important configuration
+*_classification_results_*.json
+*_run_summary_*.json
+aggregated_results_*.json
+azure_openai_usage.json
+
+# Important files to keep
+!package.json
+!package-lock.json
+!.env.template
+
+# Local configuration
 .env 
