@@ -2,6 +2,8 @@
  * Custom error types for the application
  */
 
+import type { PipelineResult } from '../pipeline/ProcessingPipeline';
+
 /**
  * Base error class for all application errors
  */
@@ -71,13 +73,11 @@ export class AnthropicApiError extends ApiError {
  * Error related to document processing
  */
 export class DocumentProcessingError extends AppError {
-  public documentPath?: string;
-  public stage: string;
+  public result: PipelineResult;
 
-  constructor(message: string, stage: string, documentPath?: string) {
-    super(`Document Processing Error (${stage}): ${message}`);
-    this.stage = stage;
-    this.documentPath = documentPath;
+  constructor(message: string, result: PipelineResult) {
+    super(`Document Processing Error: ${message}`);
+    this.result = result;
   }
 }
 
@@ -113,27 +113,36 @@ export class ValidationError extends AppError {
  * @returns True if the error is retryable, false otherwise
  */
 export function isRetryableError(error: any): boolean {
+  // Network errors are generally retryable
+  if (error?.code === 'ECONNRESET' ||
+      error?.code === 'ETIMEDOUT' ||
+      error?.code === 'ECONNABORTED' ||
+      error?.code === 'ENETUNREACH') {
+    return true;
+  }
+
+  // Retry on API rate limit errors
+  if (error instanceof ApiError && 
+      (error.status === 429 || 
+       error.status === 503 || 
+       error.status === 502)) {
+    return true;
+  }
+
+  // Check for other API errors that should be retried
   if (error instanceof ApiError) {
-    // Retry rate limit and server errors
-    return (
-      error.status === 429 || // Too Many Requests
-      (error.status && error.status >= 500 && error.status < 600) || // Server Errors
-      error.message.includes('timeout') ||
-      error.message.includes('network') ||
-      error.message.includes('connection')
-    );
+    // 5xx server errors are generally retryable
+    if (error.status && error.status >= 500 && error.status < 600) {
+      return true;
+    }
+
+    // Don't retry 4xx client errors (except those above)
+    if (error.status && error.status >= 400 && error.status < 500) {
+      return false;
+    }
   }
-  
-  // Generic network or timeout errors
-  if (error instanceof Error) {
-    return (
-      error.message.includes('timeout') ||
-      error.message.includes('network') ||
-      error.message.includes('ECONNRESET') ||
-      error.message.includes('ETIMEDOUT')
-    );
-  }
-  
+
+  // Default to not retrying for other errors
   return false;
 }
 
@@ -149,14 +158,16 @@ export function getRetryDelayMs(
   baseDelayMs = 500,
   maxDelayMs = 30000
 ): number {
-  // Calculate exponential backoff with jitter
-  const expBackoff = baseDelayMs * Math.pow(2, attempt);
+  // Exponential backoff with jitter
+  const exponentialDelay = Math.min(
+    maxDelayMs, 
+    baseDelayMs * Math.pow(2, attempt)
+  );
   
-  // Add jitter (random value between 0 and 25% of the delay)
-  const jitter = Math.random() * 0.25 * expBackoff;
+  // Add jitter (±25%)
+  const jitter = exponentialDelay * 0.25 * (Math.random() - 0.5);
   
-  // Return the delay, capped at maxDelayMs
-  return Math.min(expBackoff + jitter, maxDelayMs);
+  return Math.max(baseDelayMs, Math.floor(exponentialDelay + jitter));
 }
 
 /**
@@ -173,27 +184,24 @@ export async function withRetry<T>(
   baseDelayMs = 500,
   maxDelayMs = 30000
 ): Promise<T> {
-  let lastError: Error | undefined;
+  let lastError: Error | null = null;
   
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
-    } catch (error: any) {
-      lastError = error;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
       
-      // If it's not retryable or we've hit the max retries, throw
-      if (!isRetryableError(error) || attempt === maxRetries) {
-        throw error;
+      if (attempt < maxRetries && isRetryableError(error)) {
+        const delay = getRetryDelayMs(attempt, baseDelayMs, maxDelayMs);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      } else {
+        break;
       }
-      
-      // Calculate and wait the retry delay
-      const delayMs = getRetryDelayMs(attempt, baseDelayMs, maxDelayMs);
-      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
   
-  // This should never happen, but TypeScript requires it
-  throw lastError || new Error('Unknown error in retry logic');
+  throw lastError;
 }
 
 export default {

@@ -91,6 +91,9 @@ export class MistralOCRProcessor {
         result = await this.processPDF(filePath, mergedOptions);
       } else if (['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.webp'].includes(fileExt)) {
         result = await this.processImage(filePath, mergedOptions);
+      } else if (['.txt', '.md'].includes(fileExt)) {
+        // Special case for testing: process text files directly
+        result = await this.processTextFile(filePath, mergedOptions);
       } else {
         throw new DocumentProcessingError(`Unsupported file format: ${fileExt}`, 'format-validation', filePath);
       }
@@ -241,6 +244,148 @@ export class MistralOCRProcessor {
       logger.error(`Error processing image: ${(error as Error).message}`);
       throw new DocumentProcessingError(`Failed to process image: ${(error as Error).message}`, 'image-processing', filePath);
     }
+  }
+
+  /**
+   * Process a text or markdown file directly (for testing)
+   * 
+   * @param filePath - Path to the text file
+   * @param options - OCR processing options
+   * @returns Promise with OCR processing result
+   */
+  private async processTextFile(
+    filePath: string,
+    options: OCRProcessingOptions
+  ): Promise<OCRProcessingResult> {
+    try {
+      logger.info(`Processing text file: ${path.basename(filePath)}`);
+      
+      // Read the text file directly
+      const content = await fs.readFile(filePath, 'utf8');
+      
+      // Split into pages if there are page markers
+      const pageMarkers = content.match(/\n---+\s*page\s+\d+\s*---+\n/gi);
+      let pages: { pageNumber: number; content: string }[] = [];
+      
+      if (pageMarkers && pageMarkers.length > 0) {
+        // Split the content by page markers
+        const pageContents = content.split(/\n---+\s*page\s+\d+\s*---+\n/gi);
+        
+        // The first part may be empty if the file starts with a page marker
+        if (pageContents[0].trim() === '') {
+          pageContents.shift();
+        }
+        
+        // Extract page numbers from the markers
+        const pageNumbers = pageMarkers.map(marker => {
+          const match = marker.match(/page\s+(\d+)/i);
+          return match ? parseInt(match[1], 10) : 0;
+        });
+        
+        // Create page objects
+        pages = pageContents.map((content, index) => ({
+          pageNumber: pageNumbers[index] || index + 1,
+          content: content.trim()
+        }));
+      } else {
+        // Treat the whole file as a single page
+        pages = [{ pageNumber: 1, content }];
+      }
+      
+      // If it's a markdown file, we're already good to go
+      // If it's a plain text file and markdown output is requested, add some formatting
+      if (options.outputFormat === 'markdown' && path.extname(filePath).toLowerCase() === '.txt') {
+        pages = pages.map(page => ({
+          pageNumber: page.pageNumber,
+          content: this.convertToMarkdown(page.content)
+        }));
+      }
+      
+      return {
+        success: true,
+        text: pages.map(p => p.content).join('\n\n'),
+        pages,
+        metadata: {
+          documentName: path.basename(filePath),
+          processedAt: new Date().toISOString(),
+          pageCount: pages.length,
+          processingTimeMs: 0, // Will be updated by calling method
+          apiCallCount: 0, // No API calls for text files
+        },
+      };
+    } catch (error) {
+      logger.error(`Error processing text file: ${(error as Error).message}`);
+      throw new DocumentProcessingError(`Failed to process text file: ${(error as Error).message}`, 'text-processing', filePath);
+    }
+  }
+
+  /**
+   * Convert plain text to simple markdown format
+   * 
+   * @param text - Plain text to convert
+   * @returns Markdown formatted text
+   */
+  private convertToMarkdown(text: string): string {
+    // This is a very basic conversion that handles some common patterns
+    
+    // Convert lines that look like headers
+    let result = text.replace(/^([A-Z][A-Z\s]+):\s*$/gm, '## $1');
+    
+    // Convert lines that look like table headers and data
+    // This is very simplistic and won't handle all cases
+    const lines = result.split('\n');
+    const processedLines: string[] = [];
+    
+    let inTable = false;
+    let columnCount = 0;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
+      
+      // Detect potential table header
+      if (!inTable && line.includes('|') && nextLine.includes('|')) {
+        // Count columns and check if they match
+        const headerCols = line.split('|').filter(Boolean).length;
+        const nextCols = nextLine.split('|').filter(Boolean).length;
+        
+        if (headerCols === nextCols) {
+          // This looks like a table header
+          processedLines.push(line);
+          // Add separator line
+          processedLines.push(
+            '|' + Array(headerCols).fill('---').join('|') + '|'
+          );
+          inTable = true;
+          columnCount = headerCols;
+          continue;
+        }
+      }
+      
+      // Continue table if we're in one and the line has the right format
+      if (inTable) {
+        if (line.includes('|')) {
+          const cols = line.split('|').filter(Boolean).length;
+          if (cols === columnCount || line.trim() === '') {
+            processedLines.push(line);
+            continue;
+          } else {
+            // Table ended
+            inTable = false;
+          }
+        } else {
+          // Table ended
+          inTable = false;
+        }
+      }
+      
+      // Not in a table
+      if (!inTable) {
+        processedLines.push(line);
+      }
+    }
+    
+    return processedLines.join('\n');
   }
 
   /**

@@ -8,12 +8,21 @@
 import path from 'path';
 import { config } from './config';
 import { logger } from './utils/logger';
-import MistralOCRProcessor from './core/MistralOCR';
-import * as documentUtils from './utils/documentUtils';
+import ProcessingPipeline from './pipeline/ProcessingPipeline';
 import fs from 'fs-extra';
+import dotenv from 'dotenv';
+import { AnthropicClient } from './utils/AnthropicClient';
+import { PageClassifier } from './core/PageClassifier';
+
+// Load environment variables from .env file
+dotenv.config();
+
+// Log startup information
+logger.info('Maritime SOF Processor - Starting up');
+logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
 
 /**
- * Process a single document using Mistral OCR
+ * Process a single document using the full processing pipeline
  * 
  * @param filePath Path to the document file
  * @param outputDir Directory to save the results
@@ -23,27 +32,18 @@ async function processDocument(filePath: string, outputDir: string = config.path
   logger.info(`Processing document: ${filePath}`);
   
   try {
-    // Validate document
-    if (!await documentUtils.isValidDocument(filePath)) {
-      throw new Error(`Invalid document: ${filePath}`);
-    }
-    
-    // Check file size
-    if (!await documentUtils.isDocumentSizeWithinLimits(filePath)) {
-      throw new Error(`Document too large: ${filePath}`);
-    }
-    
-    // Create OCR processor
-    const processor = new MistralOCRProcessor();
+    // Create the processing pipeline
+    const pipeline = new ProcessingPipeline();
     
     // Process document
-    const result = await processor.processDocument(filePath);
+    const result = await pipeline.processDocument(filePath, outputDir);
     
-    // Generate output path
-    const outputPath = path.join(outputDir, `${path.parse(filePath).name}_processed.json`);
+    // Generate output path for the summary
+    const outputPath = path.join(outputDir, `${path.parse(filePath).name}_summary.json`);
     
-    // Save results
-    await documentUtils.saveProcessingResults(result, outputPath);
+    // Save summary results
+    await fs.ensureDir(path.dirname(outputPath));
+    await fs.writeJson(outputPath, result, { spaces: 2 });
     
     logger.info(`Document processing complete: ${outputPath}`);
     return outputPath;
@@ -64,38 +64,26 @@ async function processDirectory(inputDir: string = config.paths.inputDir, output
   logger.info(`Processing directory: ${inputDir}`);
   
   try {
-    // Ensure directories exist
-    await fs.ensureDir(inputDir);
-    await fs.ensureDir(outputDir);
+    // Create the processing pipeline
+    const pipeline = new ProcessingPipeline();
     
-    // Get all files in the directory
-    const files = await fs.readdir(inputDir);
+    // Process all documents in the directory
+    const results = await pipeline.processDirectory(inputDir, outputDir);
     
-    // Filter for valid documents
-    const validFiles = [];
-    for (const file of files) {
-      const filePath = path.join(inputDir, file);
-      if (await documentUtils.isValidDocument(filePath)) {
-        validFiles.push(filePath);
-      }
-    }
+    // Generate output path for the summary
+    const outputPath = path.join(outputDir, 'batch_summary.json');
     
-    logger.info(`Found ${validFiles.length} valid documents to process`);
+    // Save summary results
+    await fs.ensureDir(path.dirname(outputPath));
+    await fs.writeJson(outputPath, results, { spaces: 2 });
     
-    // Process each document
-    const results = [];
-    for (const filePath of validFiles) {
-      try {
-        const result = await processDocument(filePath, outputDir);
-        results.push(result);
-      } catch (error) {
-        logger.error(`Error processing ${filePath}: ${(error as Error).message}`);
-        // Continue with next file
-      }
-    }
+    // Return paths to all processed files
+    const resultPaths = results.map(result => {
+      return result.classification.outputPath || '';
+    }).filter(Boolean);
     
-    logger.info(`Directory processing complete: ${results.length} of ${validFiles.length} documents processed`);
-    return results;
+    logger.info(`Directory processing complete: ${resultPaths.length} documents processed.`);
+    return resultPaths;
   } catch (error) {
     logger.error(`Error processing directory: ${(error as Error).message}`);
     throw error;
@@ -106,18 +94,37 @@ async function processDirectory(inputDir: string = config.paths.inputDir, output
 export {
   processDocument,
   processDirectory,
-  MistralOCRProcessor,
+  ProcessingPipeline,
 };
 
-// If this file is run directly, process the input directory
+/**
+ * Main function to run the application
+ */
+async function main() {
+  try {
+    logger.info('Initializing services...');
+    
+    // Initialize the Anthropic client
+    const client = new AnthropicClient();
+    
+    // Initialize the page classifier
+    const classifier = new PageClassifier(client);
+    
+    logger.info('Services initialized successfully');
+    
+    // Ready for document processing
+    logger.info('Ready to process documents');
+    
+  } catch (error) {
+    logger.error('Error during initialization:', error);
+    process.exit(1);
+  }
+}
+
+// Run the main function if this file is executed directly
 if (require.main === module) {
-  processDirectory()
-    .then(results => {
-      logger.info(`Processing complete. ${results.length} documents processed.`);
-      process.exit(0);
-    })
-    .catch(error => {
-      logger.error(`Processing failed: ${error.message}`);
-      process.exit(1);
-    });
+  main().catch(error => {
+    logger.error('Unhandled error:', error);
+    process.exit(1);
+  });
 } 
