@@ -15,7 +15,7 @@ export const config = {
   // Mistral API configuration
   mistral: {
     apiKey: process.env.MISTRAL_API_KEY || '',
-    model: process.env.MISTRAL_MODEL || 'mistral-large-latest',
+    model: process.env.MISTRAL_MODEL || 'mistral-large-2402',
     maxRetries: parseInt(process.env.MISTRAL_MAX_RETRIES || '3', 10),
     timeout: parseInt(process.env.MISTRAL_TIMEOUT || '60000', 10),
     baseUrl: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai'

@@ -10,7 +10,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { config } from '../config';
 import { logger } from '../utils/logger';
-import { AppError, MistralApiError, DocumentProcessingError } from '../utils/errors';
+import { AppError, MistralApiError, DocProcessingError } from '../utils/errors';
 
 // Interface for OCR processing options
 export interface OCRProcessingOptions {
@@ -80,7 +80,7 @@ export class MistralOCRProcessor {
     
     // Check if file exists
     if (!await fs.pathExists(filePath)) {
-      throw new DocumentProcessingError(`File not found: ${filePath}`, 'document-validation', filePath);
+      throw new DocProcessingError(`File not found: ${filePath}`, 'document-validation', filePath);
     }
 
     try {
@@ -95,7 +95,7 @@ export class MistralOCRProcessor {
         // Special case for testing: process text files directly
         result = await this.processTextFile(filePath, mergedOptions);
       } else {
-        throw new DocumentProcessingError(`Unsupported file format: ${fileExt}`, 'format-validation', filePath);
+        throw new DocProcessingError(`Unsupported file format: ${fileExt}`, 'format-validation', filePath);
       }
 
       // Add metadata to the result
@@ -114,7 +114,7 @@ export class MistralOCRProcessor {
       }
       
       logger.error(`Error processing document: ${(error as Error).message}`);
-      throw new DocumentProcessingError(`Failed to process document: ${(error as Error).message}`, 'ocr-processing', filePath);
+      throw new DocProcessingError(`Failed to process document: ${(error as Error).message}`, 'ocr-processing', filePath);
     }
   }
 
@@ -153,7 +153,7 @@ export class MistralOCRProcessor {
       
       // Process the document with Mistral OCR
       const response = await this.callMistralOCRWithRetry({
-        model: config.mistral.model,
+        model: "mistral-ocr-latest",
         document: {
           type: "document_url",
           documentUrl: signedUrl.url,
@@ -178,7 +178,7 @@ export class MistralOCRProcessor {
       };
     } catch (error) {
       logger.error(`Error processing PDF: ${(error as Error).message}`);
-      throw new DocumentProcessingError(`Failed to process PDF: ${(error as Error).message}`, 'pdf-processing', filePath);
+      throw new DocProcessingError(`Failed to process PDF: ${(error as Error).message}`, 'pdf-processing', filePath);
     }
   }
 
@@ -217,7 +217,7 @@ export class MistralOCRProcessor {
       
       // Process the image with Mistral OCR
       const response = await this.callMistralOCRWithRetry({
-        model: config.mistral.model,
+        model: "mistral-ocr-latest",
         document: {
           type: "document_url",
           documentUrl: signedUrl.url,
@@ -242,7 +242,7 @@ export class MistralOCRProcessor {
       };
     } catch (error) {
       logger.error(`Error processing image: ${(error as Error).message}`);
-      throw new DocumentProcessingError(`Failed to process image: ${(error as Error).message}`, 'image-processing', filePath);
+      throw new DocProcessingError(`Failed to process image: ${(error as Error).message}`, 'image-processing', filePath);
     }
   }
 
@@ -315,7 +315,7 @@ export class MistralOCRProcessor {
       };
     } catch (error) {
       logger.error(`Error processing text file: ${(error as Error).message}`);
-      throw new DocumentProcessingError(`Failed to process text file: ${(error as Error).message}`, 'text-processing', filePath);
+      throw new DocProcessingError(`Failed to process text file: ${(error as Error).message}`, 'text-processing', filePath);
     }
   }
 

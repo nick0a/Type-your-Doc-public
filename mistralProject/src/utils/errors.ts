@@ -70,7 +70,7 @@ export class AnthropicApiError extends ApiError {
 }
 
 /**
- * Error related to document processing
+ * Error related to document processing in the full pipeline
  */
 export class DocumentProcessingError extends AppError {
   public result: PipelineResult;
@@ -78,6 +78,20 @@ export class DocumentProcessingError extends AppError {
   constructor(message: string, result: PipelineResult) {
     super(`Document Processing Error: ${message}`);
     this.result = result;
+  }
+}
+
+/**
+ * Simple document processing error for use in individual components
+ */
+export class DocProcessingError extends AppError {
+  public stage: string;
+  public filePath?: string;
+
+  constructor(message: string, stage: string, filePath?: string) {
+    super(`Document Processing Error (${stage}): ${message}`);
+    this.stage = stage;
+    this.filePath = filePath;
   }
 }
 
@@ -211,6 +225,7 @@ export default {
   MistralApiError,
   AnthropicApiError,
   DocumentProcessingError,
+  DocProcessingError,
   FileError,
   ValidationError,
   isRetryableError,
