@@ -7,7 +7,7 @@ import {
   SofAiExtractResult,
   TimeFrame,
   sofAiExtractsToExtractTable,
-} from './models/sofTypes';
+} from '../../newMistral/sofTypesExtraction';
 
 /**
  * Test the model validation

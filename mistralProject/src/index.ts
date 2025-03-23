@@ -13,6 +13,8 @@ import fs from 'fs-extra';
 import dotenv from 'dotenv';
 import { AnthropicClient } from './utils/AnthropicClient';
 import { PageClassifier } from './core/PageClassifier';
+import { readValidationCSV, getUniqueDocuments, ensureDirectoriesExist } from './utils/fileUtils';
+import { documentProcessor } from './core/DocumentProcessor';
 
 // Load environment variables from .env file
 dotenv.config();
@@ -98,33 +100,69 @@ export {
 };
 
 /**
- * Main function to run the application
+ * Main function to run the document classification system
  */
 async function main() {
   try {
-    logger.info('Initializing services...');
+    logger.info('Starting document classification system');
     
-    // Initialize the Anthropic client
-    const client = new AnthropicClient();
+    // Ensure directories exist
+    ensureDirectoriesExist();
     
-    // Initialize the page classifier
-    const classifier = new PageClassifier(client);
+    // Create a dummy dataset if it doesn't exist (for testing)
+    const validationPath = path.resolve(__dirname, '..', 'validationData');
+    if (!fs.existsSync(validationPath)) {
+      fs.mkdirSync(validationPath, { recursive: true });
+    }
     
-    logger.info('Services initialized successfully');
+    // Use a real file from the document folder for testing (first one we find)
+    const docFolder = path.resolve(__dirname, '..', 'validationData/Agent&MasterSOFs');
+    if (!fs.existsSync(docFolder)) {
+      throw new Error(`Document folder not found: ${docFolder}`);
+    }
     
-    // Ready for document processing
-    logger.info('Ready to process documents');
+    // Find the first PDF file in the document folder
+    const files = fs.readdirSync(docFolder).filter(file => file.toLowerCase().endsWith('.pdf'));
+    if (files.length === 0) {
+      throw new Error('No PDF files found in document folder');
+    }
     
+    // For testing, just use the first file
+    const testFile = files[0];
+    logger.info(`Using test file: ${testFile}`);
+    
+    // Process the test file
+    try {
+      logger.info(`\n===== Processing document: ${testFile} =====`);
+      
+      // Process the document
+      const result = await documentProcessor.processDocument(testFile);
+      
+      // Log results
+      logger.info(`Classification completed for: ${testFile}`);
+      logger.info(`Detected ${result.pages.length} pages`);
+      logger.info(`Detected ports: ${result.ports.join(', ') || 'None detected'}`);
+      
+      // Log a summary of the classifications
+      logger.info('Classification summary:');
+      for (const page of result.pages) {
+        logger.info(`Page ${page.pageNumber}: ${page.mainCategory || 'UNCLASSIFIED'} / ${page.documentType || 'UNKNOWN'} (Confidence: ${page.confidence})`);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.error(`Error processing document ${testFile}: ${errorMessage}`);
+    }
+    
+    logger.info('\nDocument classification system completed successfully');
   } catch (error) {
-    logger.error('Error during initialization:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`Error in main process: ${errorMessage}`);
     process.exit(1);
   }
 }
 
-// Run the main function if this file is executed directly
-if (require.main === module) {
-  main().catch(error => {
-    logger.error('Unhandled error:', error);
-    process.exit(1);
-  });
-} 
+// Run the main function
+main().catch(error => {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  logger.error(`Unhandled error: ${errorMessage}`);
+  process.exit(1); 

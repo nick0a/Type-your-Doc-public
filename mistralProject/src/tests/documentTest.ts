@@ -10,7 +10,7 @@ import { ProcessingPipeline } from '../pipeline/ProcessingPipeline';
 import { MistralOCRProcessor } from '../core/MistralOCR';
 import { PageClassifier } from '../core/PageClassifier';
 import { SofExtractor } from '../core/SofExtractor';
-import { ClassifiedPage } from '../models/sofTypes';
+import { ClassifiedPage } from '../../../newMistral/sofTypesExtraction';
 
 // Set DEBUG environment variable to enable debug logging
 process.env.DEBUG = 'true';

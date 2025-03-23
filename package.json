@@ -1,0 +1,22 @@
+{
+  "name": "mistral-ocr-simple",
+  "version": "1.0.0",
+  "description": "Simple Mistral OCR document processor",
+  "main": "newMistral.js",
+  "scripts": {
+    "start": "node newMistral.js",
+    "build": "tsc",
+    "ocr:simple": "ts-node simpleOCR.ts",
+    "classify:sof": "ts-node classifySOF.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  }
+}

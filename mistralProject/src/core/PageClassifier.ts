@@ -10,7 +10,7 @@ import {
   PageClassificationResult, 
   ClassifiedDocument 
 } from '../models/PageClassification';
-import { ClassifiedPage } from '../models/sofTypes';
+import { ClassifiedPage } from '../../../newMistral/sofTypesExtraction';
 
 export class PageClassifier {
   private client: AnthropicClient;

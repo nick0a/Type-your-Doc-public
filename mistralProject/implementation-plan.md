@@ -669,4 +669,620 @@ The complete system will be verified against these key metrics:
 4. **Reliability:** >99% success rate for document processing
 5. **Cost efficiency:** At least 15% reduction in Claude API costs through page filtering
 
-When these criteria are met, the system will be ready for production use. 
+When these criteria are met, the system will be ready for production use.
+
+## Phase 10: Document Type Classification with Mistral OCR and Claude
+
+**Objective:** Implement a pipeline to extract text from documents using Mistral OCR and classify each page into the proper document category and subcategory using Claude 3.7, with special emphasis on accurately identifying and differentiating, Masters Statement of Fact, and Agents Statement of Fact documents.
+
+### Overview
+
+This phase builds upon the existing OCR capabilities to provide accurate document type classification at the page level. The system will:
+
+1. Process PDF documents from the validation dataset
+2. Extract text from each page using Mistral OCR
+3. Send both the page image and extracted text to Claude 3.7
+4. Receive and store classification results for each page, including port information
+5. Implement robust error handling for potentially new document types
+
+### Approach Evaluation
+
+We'll implement and rigorously test both approaches to determine which provides higher accuracy:
+
+#### Approach 1: PDF Page + OCR Text (Preferred approach if PDF page separation is not an issue)
+- Extract individual PDF pages
+- Process each page with Mistral OCR
+- Send the PDF page and OCR text to Claude for classification
+
+#### Approach 2: Page Images + OCR Text
+- Convert PDF pages to high-quality images
+- Process each image with Mistral OCR
+- Send the image and OCR text to Claude for classification
+
+**Decision Criteria:**
+- Primary Factor: Classification accuracy (measured against validation dataset)
+- Secondary Factor: Processing efficiency (only if accuracy is comparable)
+- We will conduct a comprehensive A/B test with at least 100 sample pages
+
+### Implementation Tasks
+
+1. **PDF Processing Module**
+   - Create functions to extract individual pages from PDFs
+   - Implement conversion of PDF pages to images if needed
+   - Add page metadata tracking (original document, page number)
+   - Build batching capabilities for efficient processing
+
+2. **Mistral OCR Integration**
+   - Enhance existing OCR module to process individual pages
+   - Optimize OCR settings for maritime document types
+   - Implement text structure preservation
+   - Add confidence scoring for OCR results
+
+3. **Claude Classification Module**
+   - Develop prompt templates for document type classification
+   - Create functions to prepare inputs (page image/PDF + OCR text)
+   - Implement response parsing for category and subcategory
+   - Add confidence scoring for classifications
+   - Extract port names and variations from the document
+
+4. **Type Mapping System**
+   - Build mapping between validation dataset categories and code types
+   - Create standardization for "Master Documents" → "MASTERS_CARGO_DOCS"
+   - Implement subcategory mapping and normalization
+   - Add validation to ensure types match defined enums
+
+5. **Processing Pipeline**
+   - Create main pipeline orchestrator
+   - Implement document tracking and batch processing
+   - Add comprehensive error handling and retry logic
+   - Build logging and monitoring throughout the process
+   - Implement specialized error handling for potential new document types
+
+6. **Result Management**
+   - Create structured output for classification results
+   - Implement storage of page-level classifications
+   - Build document-level aggregation of results
+   - Add validation against the type system
+   - Include port name variations in the result metadata
+
+### Implementation Details
+
+#### 1. Document Selection and Processing
+
+```typescript
+// Process only documents from validation dataset
+const processValidationDocuments = async () => {
+  // Read validation dataset CSV
+  const validationData = await readValidationCSV();
+  
+  // Extract unique document filenames
+  const documentFilenames = getUniqueDocuments(validationData);
+  
+  // Process each document
+  for (const filename of documentFilenames) {
+    await processDocument(filename);
+  }
+};
+```
+
+#### 2. Page Extraction and OCR
+
+```typescript
+// Extract pages and process with OCR
+const processDocument = async (filename: string) => {
+  // Extract PDF pages
+  const pages = await extractPDFPages(filename);
+  
+  // Process each page with Mistral OCR
+  const results = [];
+  for (const page of pages) {
+    // Convert to image if using Approach 2
+    const image = useImages ? await convertToImage(page) : page;
+    
+    // Process with Mistral OCR
+    const ocrResult = await mistralOCR.processPage(image);
+    
+    // Store result with metadata
+    results.push({
+      documentName: filename,
+      pageNumber: page.pageNumber,
+      ocrText: ocrResult.text,
+      pageImage: image,
+    });
+  }
+  
+  return results;
+};
+```
+
+#### 3. Claude Classification with Port Extraction
+
+```typescript
+// Send page data to Claude for classification
+const classifyPage = async (pageData) => {
+  // Prepare prompt for Claude
+  const prompt = createClassificationPrompt(
+    pageData.ocrText,
+    pageData.documentName,
+    pageData.pageNumber
+  );
+  
+  // Send to Claude API
+  const response = await claudeClient.classify(prompt, pageData.pageImage);
+  
+  // Parse and validate response
+  const classification = parseClassificationResponse(response);
+  
+  // Extract port names
+  const portNames = extractPortNames(classification, pageData.ocrText);
+  
+  // Map to standard types
+  const standardizedTypes = mapToStandardTypes(classification);
+  
+  // Check if classification failed or confidence is too low
+  if (!standardizedTypes.mainCategory || classification.confidence < 0.6) {
+    // Log as potential new document type
+    await logPotentialNewDocType(pageData, classification);
+    throw new DocumentClassificationError(
+      `Failed to classify document ${pageData.documentName}, page ${pageData.pageNumber}`, 
+      pageData, 
+      classification
+    );
+  }
+  
+  return {
+    ...pageData,
+    mainCategory: standardizedTypes.mainCategory,
+    documentType: standardizedTypes.documentType,
+    confidence: classification.confidence,
+    portNames: portNames,
+    reasoning: classification.reasoning
+  };
+};
+
+// Extract port names and variations
+const extractPortNames = (classification, ocrText) => {
+  // Get port names from Claude's response if available
+  const portNamesFromClassification = classification.portNames || [];
+  
+  // Use regex pattern matching to find additional port references
+  const portRegexMatches = findPortNameMatches(ocrText);
+  
+  // Combine and deduplicate
+  return [...new Set([...portNamesFromClassification, ...portRegexMatches])];
+};
+
+// Log potential new document types for review
+const logPotentialNewDocType = async (pageData, classification) => {
+  const logEntry = {
+    timestamp: new Date().toISOString(),
+    documentName: pageData.documentName,
+    pageNumber: pageData.pageNumber,
+    ocrTextSample: pageData.ocrText.substring(0, 500),
+    classificationAttempt: classification,
+  };
+  
+  await appendToNewDocTypeLog(logEntry);
+  console.warn(`Potential new document type detected: ${pageData.documentName}, page ${pageData.pageNumber}`);
+};
+```
+
+#### 4. Type Mapping with Error Handling
+
+```typescript
+// Map from classification response to standard types
+const mapToStandardTypes = (classification) => {
+  try {
+    // Map main category
+    const mainCategory = mapMainCategory(classification.category);
+    
+    // Map subcategory based on main category
+    const documentType = mapDocumentType(
+      mainCategory, 
+      classification.subcategory
+    );
+    
+    return { mainCategory, documentType };
+  } catch (error) {
+    console.error(`Type mapping error: ${error.message}`);
+    // Return partial result if possible
+    return { 
+      mainCategory: null,
+      documentType: null,
+      mappingError: error.message
+    };
+  }
+};
+
+// Map categories to standard types
+const mapMainCategory = (category: string): MainDocumentCategory => {
+  const categoryMap = {
+    'Master Documents': MainDocumentCategory.MASTERS_CARGO_DOCS,
+    'Masters Documents': MainDocumentCategory.MASTERS_CARGO_DOCS,
+    'Master Document': MainDocumentCategory.MASTERS_CARGO_DOCS,
+    'Agents Documents': MainDocumentCategory.AGENTS_SOF,
+    'Agent Documents': MainDocumentCategory.AGENTS_SOF,
+    'Agent Document': MainDocumentCategory.AGENTS_SOF,
+    'Charter Party Documents': MainDocumentCategory.CHARTER_PARTY_DOCS,
+    'Charter Party Document': MainDocumentCategory.CHARTER_PARTY_DOCS,
+    // Add mappings for other variants
+  };
+  
+  const result = categoryMap[category];
+  if (!result) {
+    throw new Error(`Unknown category: ${category}`);
+  }
+  return result;
+};
+```
+
+#### 5. Result Creation with Port Information
+
+```typescript
+// Create final document classification result
+const createDocumentResult = (classifiedPages) => {
+  // Extract all port names from document
+  const allPortNames = classifiedPages.reduce((ports, page) => {
+    return [...ports, ...(page.portNames || [])];
+  }, []);
+  
+  // Deduplicate port names
+  const uniquePortNames = [...new Set(allPortNames)];
+  
+  return {
+    documentName: classifiedPages[0].documentName,
+    totalPages: classifiedPages.length,
+    ports: uniquePortNames,
+    pages: classifiedPages.map(page => ({
+      pageNumber: page.pageNumber,
+      mainCategory: page.mainCategory,
+      documentType: page.documentType,
+      confidence: page.confidence,
+      portNames: page.portNames || [],
+      reasoning: page.reasoning,
+    })),
+  };
+};
+```
+
+### Enhanced Prompt Design
+
+The prompt for Claude will be updated to include port name extraction:
+
+```
+You are a specialized document classifier for maritime shipping documents.
+
+Your task is to:
+1. Classify this document page into the correct category and subcategory
+2. Extract all port names and their variations mentioned in the document
+
+IMPORTANT: Pay special attention to accurately identifying MASTERS_CARGO_DOCS and AGENTS_SOF documents.
+
+Main Categories:
+- MASTERS_CARGO_DOCS (Master's cargo documents)
+- AGENTS_SOF (Agent's Statement of Facts)
+- CHARTER_PARTY_DOCS (Charter Party documents)
+
+Subcategories for MASTERS_CARGO_DOCS:
+[List all subcategories]
+
+Subcategories for AGENTS_SOF:
+[List all subcategories]
+
+Subcategories for CHARTER_PARTY_DOCS:
+[List all subcategories]
+
+The document is page {pageNumber} from {documentName}.
+
+OCR text from the page:
+{ocrText}
+
+Please classify this document page AND extract all port names/locations mentioned:
+
+Provide your answer in JSON format:
+{
+  "mainCategory": "CATEGORY_NAME",
+  "subcategory": "SUBCATEGORY_NAME",
+  "confidence": 0.95,
+  "portNames": ["PORT1", "PORT1_VARIATION", "PORT2"],
+  "reasoning": "Brief explanation of your classification"
+}
+
+For port names, include ALL variations (e.g., "SGSIN", "SINGAPORE", "SNGAPORE") if they appear to refer to the same location.
+```
+
+### Testing and Evaluation with Prioritized Categories
+
+1. **Accuracy Testing for MASTERS_SOF and AGENTS_SOF**
+   - Prioritize testing documents from these categories
+   - Calculate separate accuracy metrics for these high-priority categories
+   - Set higher threshold for acceptable accuracy (>95%)
+   - Implement specialized prompt improvements focused on these categories
+
+2. **Approach Comparison for Accuracy**
+   - Run comprehensive A/B tests comparing PDF vs. Image approaches
+   - Use stratified sampling to ensure adequate representation of priority document types
+   - Measure accuracy as primary metric, with special weight on MASTERS_SOF and AGENTS_SOF
+   - Only consider efficiency if accuracy difference is <2%
+
+3. **Port Name Extraction Evaluation**
+   - Test ability to extract and normalize port references
+   - Evaluate accuracy of port variation detection
+   - Create test cases with known port variations
+
+4. **Error Handling and New Type Detection**
+   - Simulate new document types to test error handling
+   - Verify logging of potential new types
+   - Test recovery and graceful failure modes
+
+### Integration with Existing Pipeline
+
+This document classification system will be integrated into the existing pipeline:
+
+1. The Mistral OCR module (Phase 2) will be enhanced to support page-level processing
+2. The classification results will feed into the Page Classification module (Phase 3)
+3. The standardized types will ensure compatibility with the rest of the pipeline
+4. The port information will be added to the document metadata
+
+### Expected Outcomes
+
+- **Accurate Classification:** >95% accuracy for MASTERS_SOF and AGENTS_SOF categories, >90% for others
+- **Standardized Types:** All classifications mapped to the defined TypeScript enums
+- **Complete Coverage:** Classification results for every page in processed documents
+- **Rich Metadata:** Confidence scores, port information, and reasoning for each classification
+- **Robust Error Handling:** Clear logging of potential new document types
+
+### Next Steps
+
+1. Implement PDF processing module
+2. Enhance Mistral OCR for page-level processing
+3. Develop and test the Claude classification prompts with port extraction
+4. Implement type mapping and standardization
+5. Build integration with existing pipeline
+6. Conduct comprehensive testing and evaluation with emphasis on priority categories
+
+With this enhanced implementation, we'll enable accurate classification of document pages with port information, focusing on the highest-priority document types while maintaining robust error handling for potential new types.
+
+### Simplified Implementation Approach
+
+To make the implementation easier to deliver, we'll focus on a streamlined approach with these key simplifications:
+
+#### 1. Simplified Output Format
+
+We'll use a clean, simple JSON format as defined:
+
+```json
+{
+  "documentName": "example_document.pdf",
+  "totalPages": 5,
+  "ports": ["SINGAPORE", "SGSIN", "ROTTERDAM"],
+  "pages": [
+    {
+      "pageNumber": 1,
+      "mainCategory": "MASTERS_CARGO_DOCS",
+      "documentType": "NOTICE_OF_READINESS_FIRST",
+      "confidence": 0.95,
+      "portNames": ["SINGAPORE", "SGSIN"]
+    }
+  ]
+}
+```
+
+#### 2. Focused Port Extraction
+
+Instead of complex port name extraction, we'll:
+- Focus only on identifying the current port call referenced in the document
+- Ignore future planning or past voyage references
+- Include specific instructions in the Claude prompt about this focus
+- Use simple pattern matching for common port name formats
+
+#### 3. Single Approach Implementation
+
+Rather than testing both PDF and image-based approaches extensively:
+- Start with the image-based approach (converting PDF pages to images)
+- Only fall back to direct PDF processing if image approach shows significant issues
+- Reduce A/B testing complexity by focusing on one approach initially
+
+#### 4. Streamlined Classification Prompt
+
+Simplify the Claude prompt to focus on the essentials:
+
+```
+You are classifying maritime shipping documents.
+
+For this page, provide ONLY:
+documentCategoryType: [MASTERS_CARGO_DOCS, AGENTS_SOF, or CHARTER_PARTY_DOCS]
+documentSubCategoryType: [appropriate subcategory]
+currentPort: [current port of call only, not future/past ports]
+
+The document is page {pageNumber} from {documentName}.
+
+OCR text:
+{ocrText}
+```
+
+#### 5. Minimal Viable Processing Pipeline
+
+1. **Document Selection**: Process only the specific documents found in the validation dataset
+2. **Page Extraction**: Convert PDF pages to images
+3. **OCR Processing**: Apply Mistral OCR to each page image
+4. **Classification**: Use Claude to classify each page with the simplified prompt
+5. **Result Assembly**: Generate the simple JSON output format
+
+#### 6. Focused Error Handling
+
+Simplify error handling to just cover the most critical scenarios:
+- OCR failures (page couldn't be processed)
+- Classification failures (Claude couldn't determine the type)
+- Invalid or unrecognized responses
+
+#### 7. Minimal Implementation Code
+
+```typescript
+// Main processing function
+const processDocument = async (filePath: string): Promise<DocumentClassification> => {
+  // 1. Extract pages as images
+  const pageImages = await extractPDFAsImages(filePath);
+  
+  // 2. Process with OCR and classify
+  const classifiedPages = [];
+  const allPorts = new Set<string>();
+  
+  for (const [index, image] of pageImages.entries()) {
+    // Apply OCR
+    const ocrResult = await mistralOCR.process(image);
+    
+    // Classify with Claude
+    const classification = await classifyWithClaude(
+      ocrResult.text,
+      path.basename(filePath),
+      index + 1
+    );
+    
+    // Add ports to collection
+    if (classification.portNames?.length) {
+      classification.portNames.forEach(port => allPorts.add(port));
+    }
+    
+    // Add to results
+    classifiedPages.push({
+      pageNumber: index + 1,
+      mainCategory: classification.mainCategory,
+      documentType: classification.documentType,
+      confidence: classification.confidence,
+      portNames: classification.portNames || []
+    });
+  }
+  
+  // 3. Assemble result
+  return {
+    documentName: path.basename(filePath),
+    totalPages: pageImages.length,
+    ports: Array.from(allPorts),
+    pages: classifiedPages
+  };
+};
+
+// Claude classification function
+const classifyWithClaude = async (
+  ocrText: string, 
+  documentName: string, 
+  pageNumber: number
+): Promise<PageClassification> => {
+  const prompt = `
+    You are classifying maritime shipping documents.
+    
+    For this page, provide ONLY:
+    documentCategoryType: [MASTERS_CARGO_DOCS, AGENTS_SOF, or CHARTER_PARTY_DOCS]
+    documentSubCategoryType: [appropriate subcategory]
+    currentPort: [current port of call only, not future/past ports]
+    
+    The document is page ${pageNumber} from ${documentName}.
+    
+    OCR text:
+    ${ocrText}
+  `;
+  
+  const response = await claudeClient.complete({
+    prompt,
+    max_tokens: 200
+  });
+  
+  // Parse response
+  const mainCategory = extractCategory(response);
+  const documentType = extractSubcategory(response);
+  const portNames = extractPortNames(response);
+  
+  return {
+    mainCategory,
+    documentType,
+    confidence: 0.9, // Simplified confidence handling
+    portNames
+  };
+};
+```
+
+This simplified approach:
+1. Focuses on core functionality first
+2. Reduces implementation complexity
+3. Allows for faster delivery of the initial system
+4. Can be enhanced with additional features after basic functionality is validated
+
+We can implement this simplified version first, then add more sophisticated features if needed based on actual performance and accuracy. 
+
+## Implementation Progress Update
+
+### Phase 1: Core Implementation Setup (April 14, 2023)
+
+- **Project Structure & Dependencies**
+  - ✅ Created basic project structure with TypeScript configuration
+  - ✅ Installed required dependencies (csv-parser, pdf-lib, pdfjs-dist)
+  - ✅ Set up environment variables from .env file
+
+- **Data Models & Types**
+  - ✅ Defined document category enums (MASTERS_CARGO_DOCS, AGENTS_SOF, CHARTER_PARTY_DOCS)
+  - ✅ Created subcategory enums for each main category
+  - ✅ Implemented interfaces for classification results
+
+- **Basic Workflow Implementation**
+  - ✅ Created test script for document classification (test-classifier.ts)
+  - ✅ Implemented validation dataset reading and parsing 
+  - ✅ Created PDF page extraction utility (mock implementation)
+  - ✅ Set up Claude API integration for classification
+
+### Phase 2: Core Components Implementation (April 14, 2023)
+
+- **OCR Integration**
+  - ✅ Implemented Mistral OCR client with API integration
+  - ✅ Added mock implementation for testing without API keys
+  - ✅ Created realistic mock data for different document types
+  - ✅ Added base64 image handling for flexibility
+
+- **PDF Processing**
+  - ✅ Implemented PDF page extraction using pdf-lib
+  - ✅ Added image conversion utility (with mock for headless environments)
+  - ✅ Created robust error handling for PDF processing
+  - ✅ Added file format detection and validation
+
+- **Classification System**
+  - ✅ Implemented Claude classifier with API integration
+  - ✅ Created prompt template for accurate classification
+  - ✅ Added response parsing for standardized output
+  - ✅ Implemented mock classification for testing
+
+- **Document Processor**
+  - ✅ Created main document processor to orchestrate the workflow
+  - ✅ Implemented batch processing capabilities
+  - ✅ Added progress tracking and error handling
+  - ✅ Implemented result storage in standardized JSON format
+
+### Phase 3: Testing & Validation (April 14, 2023)
+
+- **Test Scripts**
+  - ✅ Created test script for processing real data (testRealData.ts)
+  - ✅ Added validation dataset integration for testing
+  - ✅ Implemented document existence verification
+  - ✅ Added detailed logging for test results
+
+- **Mock Implementation**
+  - ✅ Implemented comprehensive mock data for all document types
+  - ✅ Created realistic test responses for both OCR and classification
+  - ✅ Added heuristic-based classification for testing
+  - ✅ Enabled easy switching between real and mock APIs
+
+### Next Steps
+
+- **API Integration Testing**
+  - Run tests with real API keys
+  - Measure accuracy against validation dataset
+  - Optimize prompts based on real results
+
+- **Performance Optimization**
+  - Implement proper concurrency for batch processing
+  - Optimize memory usage for large documents
+  - Add caching for repeated operations
+
+- **Deployment & Documentation**
+  - Create comprehensive documentation
+  - Add configuration options for different environments
+  - Prepare for production deployment 

@@ -1,134 +1,106 @@
-# Maritime SOF Document Processor
+# Maritime Document Classification System
 
-This system processes maritime Statement of Facts (SOF) documents using a three-stage pipeline:
-
-1. **Document OCR with Mistral**: Extract text and structure from maritime documents
-2. **Page Classification with Claude**: Identify which pages contain SOF tables
-3. **SOF Data Extraction with Claude**: Extract structured data from SOF pages
+This system processes maritime shipping documents using Mistral OCR and Claude 3.7 to classify each page into appropriate document categories and subcategories.
 
 ## Features
 
-- Process PDF and image documents containing maritime SOF data
-- Identify and extract structured data from SOF tables
-- Generate standardized output compatible with existing systems
-- Support for parallel processing and batch operations
-- Comprehensive error handling and retry mechanisms
+- Extract text from PDF documents using Mistral OCR
+- Classify each page into document categories and subcategories using Claude 3.7
+- Identify port names mentioned in the documents
+- Generate structured JSON output with classification results
 
-## Prerequisites
+## Requirements
 
-- Node.js 18 or higher
-- Mistral AI API key
+- Node.js 14+
+- TypeScript
+- Poppler-utils (for PDF to image conversion)
+- Mistral API key
 - Anthropic API key
 
 ## Installation
 
-1. Clone the repository:
-
-```bash
-git clone https://github.com/yourusername/maritime-sof-processor.git
-cd maritime-sof-processor
-```
-
-2. Install dependencies:
+1. Install dependencies:
 
 ```bash
 npm install
 ```
 
-3. Create a `.env` file in the root directory with your API keys:
+2. Set up API keys:
+
+Create a `.env` file in the project root with your API keys:
 
 ```
-# API Keys
 MISTRAL_API_KEY=your_mistral_api_key_here
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+```
 
-# Processing Configuration
-CONCURRENCY=4
-BATCH_SIZE=2
-MAX_RETRIES=3
-RETRY_DELAY_MS=500
+3. Install Poppler-utils:
 
-# Path Configuration
-INPUT_DIR=./data/input
-OUTPUT_DIR=./data/output
-TEMP_DIR=./data/temp
+For macOS:
+```bash
+brew install poppler
+```
 
-# Logging
-LOG_LEVEL=info
-DEBUG_MODE=false
+For Ubuntu/Debian:
+```bash
+sudo apt-get install poppler-utils
 ```
 
 ## Usage
 
-### Test the configuration
-
-```bash
-npm run test:config
-```
-
-### Test the models
-
-```bash
-npm run test:models
-```
-
-### Run all tests
-
-```bash
-npm test
-```
-
-### Build the project
+1. Build the project:
 
 ```bash
 npm run build
 ```
 
-### Run in development mode
-
-```bash
-npm run dev
-```
-
-### Run in production mode
+2. Run the application:
 
 ```bash
 npm start
 ```
 
-## Project Structure
+This will process the first document found in the validation dataset.
 
+## Configuration
+
+Configuration settings can be modified in `src/config/config.ts`:
+
+- API keys and endpoints
+- Processing options (image vs. PDF, batch size, etc.)
+- File paths for input/output
+
+## Output Format
+
+The system generates a JSON output with the following structure:
+
+```json
+{
+  "documentName": "example_document.pdf",
+  "totalPages": 5,
+  "ports": ["SINGAPORE", "SGSIN", "ROTTERDAM"],
+  "pages": [
+    {
+      "pageNumber": 1,
+      "mainCategory": "MASTERS_CARGO_DOCS",
+      "documentType": "NOTICE_OF_READINESS_FIRST",
+      "confidence": 0.95,
+      "portNames": ["SINGAPORE", "SGSIN"]
+    }
+  ]
+}
 ```
-src/
-├── config/              # Configuration settings
-├── core/                # Core processing modules
-│   ├── MistralOCR.ts    # Mistral OCR integration
-│   ├── PageClassifier.ts # Claude page classifier
-│   └── SofExtractor.ts  # SOF data extraction with Claude
-├── models/              # Type definitions matching original code
-├── utils/               # Utility functions
-├── pipeline/            # Processing pipeline
-└── index.ts             # Main entry point
-```
 
-## Configuration Options
+## Document Categories
 
-The system can be configured through environment variables:
+The system classifies documents into three main categories:
 
-- `MISTRAL_API_KEY`: Your Mistral AI API key
-- `ANTHROPIC_API_KEY`: Your Anthropic API key
-- `MISTRAL_MODEL`: Mistral model to use (default: mistral-ocr-latest)
-- `ANTHROPIC_MODEL`: Anthropic model to use (default: claude-3-7-sonnet-20250219)
-- `CONCURRENCY`: Maximum number of concurrent operations (default: 4)
-- `BATCH_SIZE`: Number of items per batch (default: 2)
-- `MAX_RETRIES`: Maximum number of retries for failed operations (default: 3)
-- `RETRY_DELAY_MS`: Base delay in milliseconds for retries (default: 500)
-- `INPUT_DIR`: Directory for input documents (default: ./data/input)
-- `OUTPUT_DIR`: Directory for output results (default: ./data/output)
-- `TEMP_DIR`: Directory for temporary files (default: ./data/temp)
-- `LOG_LEVEL`: Logging level (default: info)
-- `DEBUG_MODE`: Enable debug mode (default: false)
+1. MASTERS_CARGO_DOCS - Master's cargo documents
+2. AGENTS_SOF - Agent's Statement of Facts
+3. CHARTER_PARTY_DOCS - Charter Party documents
+
+Each category has multiple subcategories defined in `src/models/types.ts`.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details. 
+MIT 

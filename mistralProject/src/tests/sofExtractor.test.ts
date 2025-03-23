@@ -6,7 +6,7 @@ import fs from 'fs-extra';
 import { MistralOCRProcessor } from '../core/MistralOCR';
 import { PageClassifier } from '../core/PageClassifier';
 import { SofExtractor } from '../core/SofExtractor';
-import { SofExtractTable, ClassifiedPage } from '../models/sofTypes';
+import { SofExtractTable, ClassifiedPage } from '../../../newMistral/sofTypesExtraction';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { AnthropicClient } from '../utils/AnthropicClient';

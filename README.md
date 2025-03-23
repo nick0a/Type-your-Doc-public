@@ -1,88 +1,112 @@
-# Document Classification Project
+# Mistral OCR Document Processor
 
-This project provides an intelligent document classification system using various AI models (Azure OpenAI GPT-4, Gemini) to automatically categorize documents based on their content and visual characteristics.
-
-## Features
-
-- Support for multiple AI models (GPT-4, Gemini)
-- Both text-based and vision-based document classification
-- Parallel processing capabilities
-- Comprehensive validation and testing suite
-- Cost management and monitoring
-- Support for both OCR and direct vision analysis
+This project provides simple tools to extract text from documents using Mistral OCR and classify SOF (Statement of Facts) documents using Claude 3.7.
 
 ## Setup
 
-1. Clone this repository:
-```bash
-git clone [repository-url]
-cd [repository-name]
-```
-
-2. Create and activate a virtual environment:
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows use: venv\Scripts\activate
-```
-
+1. Make sure you have Node.js installed
+2. Clone or download this repository
 3. Install dependencies:
-```bash
-pip install -r requirements.txt
+   ```
+   npm install
+   ```
+4. Create a `.env` file with your API keys:
+   ```
+   cp .env.example .env
+   ```
+5. Edit the `.env` file and add your API keys:
+   - Mistral API key for OCR
+   - Anthropic API key for Claude 3.7 classification
+
+## JavaScript Version
+
+### Process a document from URL:
+
+```
+node newMistral.js https://example.com/document.pdf
 ```
 
-4. Set up environment variables:
-   - Copy `.env.template` to `.env`
-   - Fill in your API keys and other configuration values
+### Process a local file:
 
-## Configuration
-
-The system can be configured through environment variables in the `.env` file:
-
-- `MODEL`: Choose between different AI models (gpt-4o, gpt-4o-mini, gemini-1.5-flash, gemini-2.0-flash)
-- `PAGES_NO`: Number of pages to process per document
-- `MAX_OUTPUT_TOKENS`: Maximum tokens for model output
-- `PARALLEL_MAX`: Maximum number of parallel processes
-- `COST_CHECKPOINT`: Cost limit for API usage
-
-## Usage
-
-### Basic Classification
-```bash
-python vision_doc_classifier.py
+```
+node newMistral.js "/path/to/your/document.pdf"
 ```
 
-### OCR-based Classification
-```bash
-python text_ocr_doc_classifier.py
+Note: When using local files with spaces or special characters in the filename, enclose the path in quotes.
+
+## TypeScript Version (Simplified)
+
+The TypeScript version automatically selects a random PDF from your validation directory:
+
+```
+npm run ocr:simple
 ```
 
-### Running Tests
-```bash
-python run_test_suite.py
+You can customize the validation directory by setting the VALIDATION_DIR environment variable in your .env file:
+
+```
+MISTRAL_API_KEY=your_api_key_here
+VALIDATION_DIR=/path/to/your/documents
 ```
 
-### Simple Test
-```bash
-python run_simple_test.py
+## SOF Classification
+
+The SOF classifier uses Mistral OCR to extract text and Claude 3.7 to classify each page as:
+- Master SOF
+- Agent SOF
+- Other
+
+It also identifies the port name where operations are taking place.
+
+To run the classifier:
+
+```
+npm run classify:sof
 ```
 
-## Project Structure
+This will:
+1. Select a random PDF from the validation directory
+2. Process it with Mistral OCR
+3. Send each page to Claude 3.7 for classification
+4. Generate a summary of the results
 
-- `vision_doc_classifier.py`: Main vision-based classification script
-- `text_ocr_doc_classifier.py`: OCR-based classification script
-- `run_test_suite.py`: Comprehensive test suite
-- `run_simple_test.py`: Quick testing script
-- `prompt_template.txt`: Template for AI model prompts
-- `requirements.txt`: Project dependencies
+The output includes:
+- `ocr_response.json` - The raw OCR data
+- `classification_results.json` - JSON format classification results
+- `classification_summary.md` - Human-readable summary
 
-## Contributing
+## How It Works
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+The script will:
+1. Send the document to Mistral OCR
+2. Extract text from all pages
+3. Save results to the `output` folder with a timestamp
+4. Create results based on the selected tool:
+   - The JavaScript version creates:
+     - `full_response.json` - Complete API response
+     - `extracted_text.md` - All extracted text in markdown format
+   - The TypeScript version creates:
+     - `ocr_response.json` - Complete API response
+     - `extracted_text.md` - All extracted text in markdown format
+   - The SOF classifier creates:
+     - `ocr_response.json` - Complete OCR API response
+     - `classification_results.json` - Results in JSON format
+     - `classification_summary.md` - Human-readable summary
 
-## License
+## Example Files to Try
 
-[Your chosen license] 
+Public URLs:
+- https://arxiv.org/pdf/2201.04234
+- https://raw.githubusercontent.com/mistralai/cookbook/refs/heads/main/mistral/ocr/receipt.png
+
+Local files:
+- Your own PDF documents
+- Images containing text (PNG, JPG)
+
+## Troubleshooting
+
+- Make sure your API keys are correct in the .env file
+- For large documents, the request might take longer to process
+- When using local files, ensure the file exists and you have permission to read it
+- For files with spaces or special characters in the name, enclose the path in quotes
+- Ensure document URLs are publicly accessible 

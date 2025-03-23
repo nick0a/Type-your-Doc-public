@@ -8,7 +8,7 @@ import { logger } from '../../utils/logger';
 import emojiLogger, { getNumberEmoji } from '../../utils/emojiLogger';
 import { DatasetManager, PageDataEntry, PageType } from './datasets/DatasetManager';
 import { ClassificationMetrics, ClassificationResult } from './metrics/ClassificationMetrics';
-import { PromptManager, PromptTemplate } from './prompts/PromptManager';
+import { PromptManager, PromptTemplate } from '../../../../newMistral/SOFClassification';
 import { ApiCostTracker, ApiProvider, ModelType } from './utils/ApiCostTracker';
 import { ReportGenerator, EvaluationReport } from './reports/ReportGenerator';
 import { MistralOCRProcessor } from '../../core/MistralOCR';

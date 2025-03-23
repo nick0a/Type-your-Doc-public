@@ -9,7 +9,7 @@ import {
   SofExtractTable, 
   aiExtractSystemPrompt,
   sofAiExtractsToExtractTable 
-} from '../models/sofTypes';
+} from '../../../newMistral/sofTypesExtraction';
 import { logger } from '../utils/logger';
 import { config } from '../config';
 import { BatchProcessor } from '../utils/batchProcessor';

@@ -13,7 +13,7 @@ import { DocumentProcessingError } from '../utils/errors';
 import { MistralOCRProcessor } from '../core/MistralOCR';
 import { PageClassifier } from '../core/PageClassifier';
 import { SofExtractor } from '../core/SofExtractor';
-import { ClassifiedDocument, SofExtractTable } from '../models/sofTypes';
+import { ClassifiedDocument, SofExtractTable } from '../../../newMistral/sofTypesExtraction';
 import * as documentUtils from '../utils/documentUtils';
 
 /**

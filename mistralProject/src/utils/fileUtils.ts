@@ -3,6 +3,9 @@ import path from 'path';
 import crypto from 'crypto';
 import { FileError } from './errors';
 import { logger } from './logger';
+import csv from 'csv-parser';
+import { createObjectCsvWriter } from 'csv-writer';
+import { config } from '../config/config';
 
 /**
  * File types supported by the application
@@ -189,6 +192,108 @@ export async function getFilesWithExtension(
   }
 }
 
+/**
+ * Interface for validation dataset entry
+ */
+export interface ValidationDataEntry {
+  original_filename: string;
+  page_number: number;
+  category: string;
+  subcategory: string;
+}
+
+/**
+ * Read the validation dataset CSV file
+ */
+export async function readValidationCSV(): Promise<ValidationDataEntry[]> {
+  return new Promise((resolve, reject) => {
+    const results: ValidationDataEntry[] = [];
+    
+    fs.createReadStream(config.paths.validationDataset)
+      .pipe(csv())
+      .on('data', (data: ValidationDataEntry) => {
+        // Convert page_number from string to number
+        results.push({
+          ...data,
+          page_number: parseInt(data.page_number.toString(), 10),
+        });
+      })
+      .on('end', () => {
+        resolve(results);
+      })
+      .on('error', (error) => {
+        reject(error);
+      });
+  });
+}
+
+/**
+ * Extract unique document filenames from validation dataset
+ */
+export function getUniqueDocuments(validationData: ValidationDataEntry[]): string[] {
+  const uniqueFilenames = new Set<string>();
+  
+  for (const entry of validationData) {
+    uniqueFilenames.add(entry.original_filename);
+  }
+  
+  return Array.from(uniqueFilenames);
+}
+
+/**
+ * Ensure all required directories exist
+ */
+export function ensureDirectoriesExist(): void {
+  // Create output directory if it doesn't exist
+  if (!fs.existsSync(config.paths.outputFolder)) {
+    fs.mkdirSync(config.paths.outputFolder, { recursive: true });
+  }
+  
+  // Create logs directory if it doesn't exist
+  const logsDir = path.dirname(config.paths.errorLogPath);
+  if (!fs.existsSync(logsDir)) {
+    fs.mkdirSync(logsDir, { recursive: true });
+  }
+}
+
+/**
+ * Append to error log
+ */
+export function appendToErrorLog(errorData: any): void {
+  const timestamp = new Date().toISOString();
+  const logEntry = `${timestamp} - ${JSON.stringify(errorData)}\n`;
+  
+  fs.appendFileSync(config.paths.errorLogPath, logEntry);
+}
+
+/**
+ * Save result to output file
+ */
+export function saveResult(documentName: string, result: any): void {
+  const outputPath = path.join(config.paths.outputFolder, `${documentName.replace(/\.[^/.]+$/, '')}_result.json`);
+  fs.writeFileSync(outputPath, JSON.stringify(result, null, 2));
+}
+
+/**
+ * Get the full path for a document
+ */
+export function getDocumentPath(filename: string): string {
+  return path.join(config.paths.documentFolder, filename);
+}
+
+/**
+ * Get temporary directory path for storing extracted pages
+ */
+export function getTempDirPath(documentName: string): string {
+  const tempDir = path.join(config.paths.outputFolder, 'temp', documentName.replace(/\.[^/.]+$/, ''));
+  
+  if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+  }
+  
+  return tempDir;
+}
+
 export default {
   FileType,
   fileExists,
@@ -200,4 +305,11 @@ export default {
   generateUniqueFilename,
   saveToFile,
   getFilesWithExtension,
+  readValidationCSV,
+  getUniqueDocuments,
+  ensureDirectoriesExist,
+  appendToErrorLog,
+  saveResult,
+  getDocumentPath,
+  getTempDirPath,
 }; 

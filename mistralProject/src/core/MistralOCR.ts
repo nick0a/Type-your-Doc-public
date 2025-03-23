@@ -5,13 +5,14 @@
  * It provides functionality to process PDF documents and images using Mistral's OCR capabilities.
  */
 
-import { Mistral } from '@mistralai/mistralai';
-import fs from 'fs-extra';
+import fs from 'fs/promises';
 import path from 'path';
-import { config } from '../config';
+import axios from 'axios';
+import dotenv from 'dotenv';
 import { logger } from '../utils/logger';
-import { AppError, MistralApiError, DocProcessingError } from '../utils/errors';
-import { processPdfInBatches } from '../utils/pdfToImageConverter';
+
+// Load environment variables
+dotenv.config();
 
 // Interface for OCR processing options
 export interface OCRProcessingOptions {
@@ -31,6 +32,7 @@ export interface OCRProcessingResult {
   pages: {
     pageNumber: number;
     content: string;
+    markdown?: string;  // Added markdown field
   }[];
   metadata: {
     documentName: string;
@@ -42,72 +44,350 @@ export interface OCRProcessingResult {
   };
 }
 
-// Interface for Mistral OCR API response
-interface MistralOCRResponse {
-  // Common fields
-  id?: string;
-  object?: string;
-  created_at?: string;
-  model?: string;
-  
-  // Different response formats
-  pages?: Array<{
-    index?: number;
-    page_number?: number;
-    text?: string;
-    content?: string;
-  }>;
-  
-  document?: {
-    pages?: Array<{
-      index?: number;
-      number?: number;
-      text?: string;
-      content?: string;
-    }>;
-  };
-  
-  text?: string;
-  content?: any;
-  json_output?: string | any;
-  
-  // Any other fields that might be present
-  [key: string]: any;
+// Interface for OCR result
+export interface OCRResult {
+  text: string;
+  confidence: number;
+}
+
+// Interface for file upload response
+interface FileUploadResponse {
+  id: string;
+  status: string;
+  purpose: string;
+  filename: string;
+  created_at: number;
+}
+
+// Interface for signed URL response
+interface SignedUrlResponse {
+  url: string;
+  file_id: string;  // Added file_id field
+  expires_at: number;
+}
+
+interface ExtractedPage {
+  pageNumber: number;
+  content: string;
+  markdown: string;
+  confidence: number;
 }
 
 /**
- * MistralOCRProcessor class is responsible for processing documents with Mistral OCR
+ * Mistral OCR client for processing images and extracting text
  */
+export class MistralOCR {
+  private apiKey: string;
+  public apiBaseUrl: string;
+  
+  constructor() {
+    // Use MISTRAL_API_KEY from environment
+    this.apiKey = process.env.MISTRAL_API_KEY || '';
+    this.apiBaseUrl = 'https://api.mistral.ai/v1';
+    
+    if (!this.apiKey) {
+      throw new Error('MISTRAL_API_KEY not set. Cannot use OCR without an API key.');
+    }
+    
+    logger.info('Initialized Mistral OCR client');
+  }
+  
+  /**
+   * Process an image file with Mistral OCR
+   */
+  async processFile(imagePath: string): Promise<OCRResult> {
+    console.log(`Processing image with Mistral OCR: ${imagePath}`);
+    
+    try {
+      const exists = await fs.access(imagePath).then(() => true).catch(() => false);
+      if (!exists) {
+        throw new Error(`Image file not found: ${imagePath}`);
+      }
+      
+      const filename = path.basename(imagePath);
+      
+      // 1. Upload the file
+      const fileBuffer = await fs.readFile(imagePath);
+      const fileUploadResponse = await this.uploadFile(fileBuffer, filename);
+      
+      // 2. Get signed URL for the file
+      const signedUrlResponse = await this.getSignedUrl(fileUploadResponse.id);
+      
+      // 3. Process the file with OCR
+      const ocrResponse = await this.processDocumentUrl(signedUrlResponse.url, filename);
+      
+      return {
+        text: ocrResponse.text || '',
+        confidence: ocrResponse.confidence || 0
+      };
+    } catch (error) {
+      console.error('Mistral OCR error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Upload a file to Mistral API
+   */
+  public async uploadFile(
+    fileBuffer: Buffer,
+    filename: string,
+    purpose: string = 'ocr'
+  ): Promise<FileUploadResponse> {
+    try {
+      const fileSize = (fileBuffer.length / (1024 * 1024)).toFixed(2);
+      logger.info(`Uploading file to Mistral API: ${filename} (${fileSize} MB)`);
+
+      const formData = new FormData();
+      const blob = new Blob([fileBuffer]);
+      formData.append('file', blob, filename);
+      formData.append('purpose', purpose);
+
+      const response = await axios.post(`${this.apiBaseUrl}/files`, formData, {
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'multipart/form-data'
+        }
+      });
+
+      logger.info(`File uploaded successfully. File ID: ${response.data.id}`);
+      return response.data;
+    } catch (error: any) {
+      if (error.response) {
+        logger.error(`File upload error - Status: ${error.response.status}`);
+        if (error.response.data) {
+          try {
+            const errorSummary = JSON.stringify(error.response.data).substring(0, 200);
+            logger.error(`Error details: ${errorSummary}...`);
+          } catch (e) {
+            logger.error(`Error details: [Unable to stringify error data]`);
+          }
+        }
+      } else {
+        logger.error(`File upload error: ${error.message}`);
+      }
+      throw new Error(`Failed to upload file: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Get a signed URL for a file
+   */
+  public async getSignedUrl(fileId: string): Promise<{ url: string }> {
+    try {
+      logger.info(`Getting signed URL for file ${fileId}`);
+      const response = await axios.get(`${this.apiBaseUrl}/files/${fileId}/content`, {
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`
+        }
+      });
+
+      // Log detailed response information for debugging
+      logger.info(`Received response with status ${response.status} and content type: ${response.headers['content-type']}`);
+      
+      // Log response data structure safely
+      try {
+        if (response.data) {
+          if (typeof response.data === 'string') {
+            logger.info(`Response is a string of length ${response.data.length}`);
+            // If it's a string and looks like a URL, use it directly
+            if (response.data.startsWith('http')) {
+              logger.info(`Response appears to be a direct URL`);
+              return { url: response.data };
+            }
+          } else if (typeof response.data === 'object') {
+            logger.info(`Response data keys: ${JSON.stringify(Object.keys(response.data))}`);
+            logger.info(`Response data preview: ${JSON.stringify(response.data).substring(0, 150)}...`);
+          }
+        }
+      } catch (logError) {
+        logger.error(`Error logging response data: ${logError}`);
+      }
+
+      // First check for the expected URL format
+      if (response.data && response.data.url) {
+        // Only log part of the URL to avoid exposing the full signed URL
+        const urlPreview = response.data.url.substring(0, 30) + '...';
+        logger.info(`Got signed URL: ${urlPreview}`);
+        return { url: response.data.url };
+      } 
+      
+      // If we don't have a URL but have a 200 status code, the response itself might be the direct content URL
+      if (response.status === 200) {
+        // For Mistral API's direct response format, try to extract the URL
+        // The response might be a JSON with a different structure than expected
+        if (response.data) {
+          if (response.data.download_url) {
+            const urlPreview = response.data.download_url.substring(0, 30) + '...';
+            logger.info(`Got download URL: ${urlPreview}`);
+            return { url: response.data.download_url };
+          } else if (response.data.file_url) {
+            const urlPreview = response.data.file_url.substring(0, 30) + '...';
+            logger.info(`Got file URL: ${urlPreview}`);
+            return { url: response.data.file_url };
+          } else if (typeof response.data === 'string' && response.data.startsWith('http')) {
+            // If response.data is a string that starts with http, it might be a direct URL
+            const urlPreview = response.data.substring(0, 30) + '...';
+            logger.info(`Using direct URL from response: ${urlPreview}`);
+            return { url: response.data };
+          } else if (response.request && response.request.res && response.request.res.responseUrl) {
+            // Some APIs put the URL in the responseUrl property
+            const urlPreview = response.request.res.responseUrl.substring(0, 30) + '...';
+            logger.info(`Using response URL: ${urlPreview}`);
+            return { url: response.request.res.responseUrl };
+          } else if (response.config && response.config.url) {
+            // If there's a config URL in the response, we might be able to use that
+            const urlPreview = response.config.url.substring(0, 30) + '...';
+            logger.info(`Using config URL: ${urlPreview}`);
+            return { url: response.config.url };
+          }
+        }
+        
+        // If the request was successful but we couldn't find a URL in the response,
+        // try using the original file content endpoint as a fallback
+        const fallbackUrl = `${this.apiBaseUrl}/files/${fileId}/content`;
+        logger.info(`No URL found in successful response, using fallback: ${fallbackUrl}`);
+        return { url: fallbackUrl };
+      }
+
+      logger.error(`Failed to get URL from response`);
+      throw new Error(`Failed to get URL from response (status: ${response.status})`);
+    } catch (error: any) {
+      if (error.response) {
+        logger.error(`Error getting signed URL - Status: ${error.response.status}`);
+        if (error.response.data) {
+          try {
+            const errorSummary = typeof error.response.data === 'string'
+              ? error.response.data.substring(0, 200)
+              : JSON.stringify(error.response.data).substring(0, 200);
+            logger.error(`Error details: ${errorSummary}...`);
+          } catch (e) {
+            logger.error(`Error details: [Unable to stringify error data]`);
+          }
+        }
+      } else {
+        logger.error(`Error getting signed URL: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+  
+  /**
+   * Process a document URL with OCR
+   */
+  private async processDocumentUrl(documentUrl: string, documentName: string = 'document.pdf'): Promise<any> {
+    try {
+      const requestBody = {
+        model: "mistral-ocr-latest",
+        document: {
+          type: "document_url",
+          document_url: documentUrl,
+          document_name: documentName
+        },
+        preserve_structure: true,
+        output_format: 'markdown',
+        enhance_tables: true,
+        include_image_base64: false
+      };
+
+      // Log request without the full URL
+      logger.info(`Processing OCR request for document: ${documentName}`);
+      logger.info(`Request options: model=${requestBody.model}, preserve_structure=${requestBody.preserve_structure}, output_format=${requestBody.output_format}`);
+
+      const response = await axios.post(
+        `${this.apiBaseUrl}/ocr`,
+        requestBody,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 180000 // 3 minutes timeout for large documents
+        }
+      );
+
+      logger.info(`OCR response received with status: ${response.status}`);
+      
+      // Log response metadata but not the full content
+      if (response.data.pages) {
+        logger.info(`Response contains ${response.data.pages.length} pages`);
+      }
+      
+      return response.data;
+    } catch (error: any) {
+      if (error.response) {
+        logger.error(`OCR API error - Status: ${error.response.status}`);
+        if (error.response.data) {
+          try {
+            const errorSummary = typeof error.response.data === 'string'
+              ? error.response.data.substring(0, 200)
+              : JSON.stringify(error.response.data).substring(0, 200);
+            logger.error(`Error details: ${errorSummary}...`);
+          } catch (e) {
+            logger.error(`Error details: [Unable to stringify error data]`);
+          }
+        }
+        logger.error(`Response headers status: ${error.response.headers?.status || 'N/A'}`);
+      } else if (error.request) {
+        logger.error(`No response received from OCR API`);
+      } else {
+        logger.error(`Error setting up OCR request: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Process a base64-encoded image with Mistral OCR
+   */
+  async processBase64(imageBase64: string, filename: string = 'unknown'): Promise<OCRResult> {
+    console.log(`Processing base64 image with Mistral OCR: ${filename}`);
+    
+    try {
+      // Convert base64 to buffer
+      const imageBuffer = Buffer.from(imageBase64.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+      
+      // Create temporary file
+      const tempPath = `/tmp/mistral_ocr_${Date.now()}.png`;
+      await fs.writeFile(tempPath, imageBuffer);
+      
+      // Process the file
+      const result = await this.processFile(tempPath);
+      
+      // Clean up
+      await fs.unlink(tempPath);
+      
+      return result;
+    } catch (error) {
+      console.error('Mistral OCR error with base64 image:', error);
+      throw error;
+    }
+  }
+}
+
+// Export singleton instance
+export const mistralOCR = new MistralOCR();
+
+// MistralOCRProcessor for document processing
 export class MistralOCRProcessor {
-  private client: Mistral;
   private defaultOptions: OCRProcessingOptions = {
     preserveStructure: true,
     outputFormat: 'markdown',
     enhanceTablesMarkdown: true,
     includeImageBase64: false,
   };
+  private ocr: MistralOCR;
 
   /**
    * Create a new MistralOCRProcessor instance
    */
   constructor() {
-    if (!config.mistral.apiKey) {
-      throw new Error('Mistral API key is not configured');
-    }
-
-    this.client = new Mistral({
-      apiKey: config.mistral.apiKey
-    });
-    
+    this.ocr = new MistralOCR();
     logger.info('MistralOCRProcessor initialized');
   }
 
   /**
-   * Process a document file with Mistral OCR, with option to convert PDF to images first
-   * 
-   * @param filePath - Path to the document file (PDF or image)
-   * @param options - OCR processing options
-   * @returns Promise with OCR processing result
+   * Process a document file with Mistral OCR
    */
   public async processDocument(
     filePath: string,
@@ -117,752 +397,273 @@ export class MistralOCRProcessor {
     const mergedOptions = { ...this.defaultOptions, ...options };
     
     // Check if file exists
-    if (!await fs.pathExists(filePath)) {
-      throw new DocProcessingError(`File not found: ${filePath}`, 'document-validation', filePath);
+    try {
+      await fs.access(filePath);
+    } catch (error) {
+      throw new Error(`File not found: ${filePath}`);
     }
 
-    // Check file MIME type before processing
     try {
-      const fileExt = path.extname(filePath).toLowerCase();
+      const fileName = path.basename(filePath);
+      logger.info(`Processing document with Mistral OCR API: ${fileName}`);
+      
+      // Read the file into a buffer
       const fileBuffer = await fs.readFile(filePath);
-      const fileType = await this.detectFileType(fileBuffer);
-
-      // Check if this is a text file being passed as PDF
-      if (fileType === 'text/plain' && ['.pdf', '.docx', '.pptx'].includes(fileExt)) {
-        logger.warn(`File ${filePath} has extension ${fileExt} but is actually a text file. Using text processing instead.`);
-        return this.processTextFile(filePath, mergedOptions);
-      }
       
-      let result: OCRProcessingResult;
-
-      // If this is a PDF and the convertToImagesFirst option is enabled, convert to images first
-      if (['.pdf'].includes(fileExt) && mergedOptions.convertToImagesFirst) {
-        logger.info(`Converting PDF to images before OCR processing: ${path.basename(filePath)}`);
-        result = await this.processPdfWithImageConversion(filePath, mergedOptions);
-      } else if (['.pdf'].includes(fileExt)) {
-        result = await this.processPDF(filePath, mergedOptions);
-      } else if (['.jpg', '.jpeg', '.png', '.tiff', '.tif', '.webp'].includes(fileExt)) {
-        result = await this.processImage(filePath, mergedOptions);
-      } else if (['.txt', '.md'].includes(fileExt)) {
-        // Special case for testing: process text files directly
-        result = await this.processTextFile(filePath, mergedOptions);
-      } else {
-        throw new DocProcessingError(`Unsupported file format: ${fileExt}`, 'format-validation', filePath);
-      }
-
-      // Add metadata to the result
-      result.metadata = {
-        ...result.metadata,
-        documentName: path.basename(filePath),
-        processedAt: new Date().toISOString(),
-        pageCount: result.pages.length,
-        processingTimeMs: Date.now() - startTime,
-      };
-
-      return result;
-    } catch (error) {
-      if (error instanceof AppError) {
-        throw error;
-      }
+      // Get file information for logging
+      const fileSize = (await fs.stat(filePath)).size;
+      const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+      const fileExt = path.extname(filePath);
+      logger.info(`File details: ${fileName}, ${fileSizeMB} MB, type: ${fileExt}`);
       
-      logger.error(`Error processing document: ${(error as Error).message}`);
-      throw new DocProcessingError(`Failed to process document: ${(error as Error).message}`, 'ocr-processing', filePath);
-    }
-  }
-
-  /**
-   * Process a PDF file with Mistral OCR
-   * 
-   * @param filePath - Path to the PDF file
-   * @param options - OCR processing options
-   * @returns Promise with OCR processing result
-   */
-  private async processPDF(
-    filePath: string,
-    options: OCRProcessingOptions
-  ): Promise<OCRProcessingResult> {
-    try {
-      logger.info(`Processing PDF: ${path.basename(filePath)}`);
+      // Step 1: Upload the file
+      logger.info(`Uploading file to Mistral API (${fileSizeMB} MB)`);
+      const uploadResponse = await this.ocr.uploadFile(fileBuffer, fileName);
       
-      // Read the PDF file
-      const fileContent = await fs.readFile(filePath);
+      const fileId = uploadResponse.id;
+      logger.info(`File uploaded successfully with ID: ${fileId}`);
       
-      // Upload the file to Mistral for OCR processing
-      const uploadedFile = await this.client.files.upload({
-        file: {
-          fileName: path.basename(filePath),
-          content: fileContent,
-        },
-        purpose: "ocr"
-      });
-      
-      logger.info(`PDF uploaded with ID: ${uploadedFile.id}`);
-      
-      // Get signed URL for the uploaded file
-      const signedUrl = await this.client.files.getSignedUrl({
-        fileId: uploadedFile.id,
-      });
-      
-      // Process the document with Mistral OCR with enhanced options
-      const response = await this.callMistralOCRWithRetry({
+      // Step 2: Process the OCR using the file_id directly in the document object
+      logger.info(`Processing OCR with file ID: ${fileId}`);
+      const requestBody = {
         model: "mistral-ocr-latest",
         document: {
-          type: "document_url",
-          documentUrl: signedUrl.url,
+          type: "file_id",
+          file_id: fileId
         },
-        includeImageBase64: options.includeImageBase64,
-        // Add enhanced options for better text extraction
-        preferMarkdown: options.outputFormat === 'markdown',
-        enhanceTables: options.enhanceTablesMarkdown,
-        preserveStructure: options.preserveStructure,
-        // Set OCR mode based on highQuality option
-        ocrMode: options.highQuality ? "high_quality" : "standard"
+        preserve_structure: mergedOptions.preserveStructure,
+        output_format: mergedOptions.outputFormat,
+        enhance_tables: mergedOptions.enhanceTablesMarkdown,
+        include_image_base64: mergedOptions.includeImageBase64
+      };
+      
+      // Log request metadata
+      logger.info(`Sending OCR request for document: ${fileName}`);
+      logger.info(`OCR request options: model=${requestBody.model}, preserve_structure=${!!options.preserveStructure}, output_format=${options.outputFormat || 'markdown'}`);
+      
+      const response = await axios.post(`${this.ocr.apiBaseUrl}/ocr`, requestBody, {
+        headers: {
+          'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 180000 // 3 minutes timeout for large documents
       });
       
-      // Add debug logging for the response
-      logger.info(`OCR response type: ${typeof response}`);
-      logger.info(`OCR response keys: ${Object.keys(response).join(', ')}`);
-      if (response.pages) {
-        logger.info(`Found ${response.pages.length} pages in response`);
-        for (let i = 0; i < Math.min(3, response.pages.length); i++) {
-          const page = response.pages[i];
-          logger.info(`Page ${i+1} content length: ${(page.content || page.text || '').length}`);
-        }
+      logger.info(`Received response from Mistral OCR API: status=${response.status}`);
+      const apiResponse = response.data;
+      
+      // Log response metadata but not the full content
+      if (apiResponse.pages) {
+        logger.info(`Response contains ${apiResponse.pages.length} pages`);
       }
       
-      // Parse the response into pages
-      const pages = this.parseOcrResponseIntoPages(response);
+      // Extract pages from the response
+      const pages = this.parseOcrResponseIntoPages(apiResponse);
+      logger.info(`Extracted ${pages.length} pages from OCR response`);
       
-      // Check if any content was extracted
-      const hasContent = pages.some(page => page.content && page.content.trim().length > 0);
-      if (!hasContent) {
-        logger.warn(`No text content was extracted from PDF: ${path.basename(filePath)}`);
-        logger.warn(`This might be due to document encryption, poor quality scan, or unsupported format`);
-      }
+      // Extract text from the response (but don't log the full text)
+      const text = pages.map(p => p.content).join('\n\n');
+      logger.info(`Total extracted text length: ${text.length} characters`);
+      
+      const processingTime = Date.now() - startTime;
+      logger.info(`OCR processing completed in ${processingTime}ms`);
       
       return {
         success: true,
-        text: pages.map(p => p.content).join('\n\n'),
-        pages,
+        text: text,
+        pages: pages,
         metadata: {
-          documentName: path.basename(filePath),
+          documentName: fileName,
           processedAt: new Date().toISOString(),
           pageCount: pages.length,
-          processingTimeMs: 0, // Will be updated by calling method
-          apiCallCount: 1,
-        },
-      };
-    } catch (error) {
-      logger.error(`Error processing PDF: ${(error as Error).message}`);
-      throw new DocProcessingError(`Failed to process PDF: ${(error as Error).message}`, 'pdf-processing', filePath);
-    }
-  }
-
-  /**
-   * Process an image file with Mistral OCR
-   * 
-   * @param filePath - Path to the image file
-   * @param options - OCR processing options
-   * @returns Promise with OCR processing result
-   */
-  private async processImage(
-    filePath: string,
-    options: OCRProcessingOptions
-  ): Promise<OCRProcessingResult> {
-    try {
-      logger.info(`Processing image: ${path.basename(filePath)}`);
-      
-      // Read the image file
-      const fileContent = await fs.readFile(filePath);
-      
-      // Upload the file to Mistral for OCR processing
-      const uploadedFile = await this.client.files.upload({
-        file: {
-          fileName: path.basename(filePath),
-          content: fileContent,
-        },
-        purpose: "ocr"
-      });
-      
-      // Get signed URL for the uploaded file
-      const signedUrl = await this.client.files.getSignedUrl({
-        fileId: uploadedFile.id,
-      });
-      
-      // Process the document with Mistral OCR with enhanced options
-      const response = await this.callMistralOCRWithRetry({
-        model: "mistral-ocr-latest",
-        document: {
-          type: "image_url",
-          imageUrl: signedUrl.url,
-        },
-        includeImageBase64: options.includeImageBase64,
-        // Add enhanced options for better text extraction
-        preferMarkdown: options.outputFormat === 'markdown',
-        enhanceTables: options.enhanceTablesMarkdown,
-        preserveStructure: options.preserveStructure,
-        // Set OCR mode based on highQuality option
-        ocrMode: options.highQuality ? "high_quality" : "standard"
-      });
-      
-      // Add debug logging for the response
-      logger.info(`OCR response type: ${typeof response}`);
-      logger.info(`OCR response keys: ${Object.keys(response).join(', ')}`);
-      if (response.pages) {
-        logger.info(`Found ${response.pages.length} pages in response`);
-        for (let i = 0; i < Math.min(3, response.pages.length); i++) {
-          const page = response.pages[i];
-          logger.info(`Page ${i+1} content length: ${(page.content || page.text || '').length}`);
+          processingTimeMs: processingTime,
+          apiCallCount: 2, // Upload and OCR process (no need for signed URL)
+          preprocessingMethod: 'file-id'
         }
-      }
-      
-      // Parse the response into pages
-      const pages = this.parseOcrResponseIntoPages(response);
-      
-      // Check if any content was extracted
-      const hasContent = pages.some(page => page.content && page.content.trim().length > 0);
-      if (!hasContent) {
-        logger.warn(`No text content was extracted from image: ${path.basename(filePath)}`);
-        logger.warn(`This might be due to image quality, handwritten text, or unsupported format`);
-      }
-      
-      return {
-        success: true,
-        text: pages.map(p => p.content).join('\n\n'),
-        pages,
-        metadata: {
-          documentName: path.basename(filePath),
-          processedAt: new Date().toISOString(),
-          pageCount: pages.length,
-          processingTimeMs: 0, // Will be updated by calling method
-          apiCallCount: 1,
-        },
       };
-    } catch (error) {
-      logger.error(`Error processing image: ${(error as Error).message}`);
-      throw new DocProcessingError(`Failed to process image: ${(error as Error).message}`, 'image-processing', filePath);
-    }
-  }
-
-  /**
-   * Process a text or markdown file directly (for testing)
-   * 
-   * @param filePath - Path to the text file
-   * @param options - OCR processing options
-   * @returns Promise with OCR processing result
-   */
-  private async processTextFile(
-    filePath: string,
-    options: OCRProcessingOptions
-  ): Promise<OCRProcessingResult> {
-    try {
-      logger.info(`Processing text file: ${path.basename(filePath)}`);
-      
-      // Read the text file directly
-      const content = await fs.readFile(filePath, 'utf8');
-      
-      // Split into pages if there are page markers
-      const pageMarkers = content.match(/\n---+\s*page\s+\d+\s*---+\n/gi);
-      let pages: { pageNumber: number; content: string }[] = [];
-      
-      if (pageMarkers && pageMarkers.length > 0) {
-        // Split the content by page markers
-        const pageContents = content.split(/\n---+\s*page\s+\d+\s*---+\n/gi);
-        
-        // The first part may be empty if the file starts with a page marker
-        if (pageContents[0].trim() === '') {
-          pageContents.shift();
+    } catch (error: any) {
+      // Detailed error logging without including binary content
+      if (error.response) {
+        logger.error(`API Error Response - Status: ${error.response.status}`);
+        if (error.response.data) {
+          // Safely log error data
+          try {
+            const errorData = typeof error.response.data === 'string' 
+              ? error.response.data.substring(0, 500) // Limit string length
+              : JSON.stringify(error.response.data).substring(0, 500);
+            logger.error(`Error Data: ${errorData}...`);
+          } catch (e) {
+            logger.error(`Error Data: [Unable to stringify error data]`);
+          }
         }
-        
-        // Extract page numbers from the markers
-        const pageNumbers = pageMarkers.map(marker => {
-          const match = marker.match(/page\s+(\d+)/i);
-          return match ? parseInt(match[1], 10) : 0;
-        });
-        
-        // Create page objects
-        pages = pageContents.map((content, index) => ({
-          pageNumber: pageNumbers[index] || index + 1,
-          content: content.trim()
-        }));
+      } else if (error.request) {
+        logger.error(`No response received from API`);
       } else {
-        // Treat the whole file as a single page
-        pages = [{ pageNumber: 1, content }];
+        logger.error(`Error setting up request: ${error.message}`);
       }
       
-      // If it's a markdown file, we're already good to go
-      // If it's a plain text file and markdown output is requested, add some formatting
-      if (options.outputFormat === 'markdown' && path.extname(filePath).toLowerCase() === '.txt') {
-        pages = pages.map(page => ({
-          pageNumber: page.pageNumber,
-          content: this.convertToMarkdown(page.content)
-        }));
-      }
-      
-      return {
-        success: true,
-        text: pages.map(p => p.content).join('\n\n'),
-        pages,
-        metadata: {
-          documentName: path.basename(filePath),
-          processedAt: new Date().toISOString(),
-          pageCount: pages.length,
-          processingTimeMs: 0, // Will be updated by calling method
-          apiCallCount: 0, // No API calls for text files
-        },
-      };
-    } catch (error) {
-      logger.error(`Error processing text file: ${(error as Error).message}`);
-      throw new DocProcessingError(`Failed to process text file: ${(error as Error).message}`, 'text-processing', filePath);
-    }
-  }
-
-  /**
-   * Convert plain text to simple markdown format
-   * 
-   * @param text - Plain text to convert
-   * @returns Markdown formatted text
-   */
-  private convertToMarkdown(text: string): string {
-    // This is a very basic conversion that handles some common patterns
-    
-    // Convert lines that look like headers
-    let result = text.replace(/^([A-Z][A-Z\s]+):\s*$/gm, '## $1');
-    
-    // Convert lines that look like table headers and data
-    // This is very simplistic and won't handle all cases
-    const lines = result.split('\n');
-    const processedLines: string[] = [];
-    
-    let inTable = false;
-    let columnCount = 0;
-    
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const nextLine = i < lines.length - 1 ? lines[i + 1] : '';
-      
-      // Detect potential table header
-      if (!inTable && line.includes('|') && nextLine.includes('|')) {
-        // Count columns and check if they match
-        const headerCols = line.split('|').filter(Boolean).length;
-        const nextCols = nextLine.split('|').filter(Boolean).length;
-        
-        if (headerCols === nextCols) {
-          // This looks like a table header
-          processedLines.push(line);
-          // Add separator line
-          processedLines.push(
-            '|' + Array(headerCols).fill('---').join('|') + '|'
-          );
-          inTable = true;
-          columnCount = headerCols;
-          continue;
-        }
-      }
-      
-      // Continue table if we're in one and the line has the right format
-      if (inTable) {
-        if (line.includes('|')) {
-          const cols = line.split('|').filter(Boolean).length;
-          if (cols === columnCount || line.trim() === '') {
-            processedLines.push(line);
-            continue;
-          } else {
-            // Table ended
-            inTable = false;
-          }
-        } else {
-          // Table ended
-          inTable = false;
-        }
-      }
-      
-      // Not in a table
-      if (!inTable) {
-        processedLines.push(line);
-      }
-    }
-    
-    return processedLines.join('\n');
-  }
-
-  /**
-   * Call Mistral OCR API with retry mechanism
-   * 
-   * @param ocrRequest - OCR request parameters
-   * @returns Promise with API response
-   */
-  private async callMistralOCRWithRetry(ocrRequest: any): Promise<MistralOCRResponse> {
-    let attempts = 0;
-    let lastError: Error | null = null;
-
-    while (attempts < config.processing.maxRetries) {
-      try {
-        attempts++;
-        
-        // Call Mistral OCR API
-        logger.info(`Calling Mistral OCR API (attempt ${attempts})...`);
-        const response = await this.client.ocr.process(ocrRequest) as MistralOCRResponse;
-        
-        // Log basic information about the response to help debugging
-        logger.info(`OCR API response received, keys: ${Object.keys(response).join(', ')}`);
-        
-        // Check if we have the expected content
-        if (response.pages) {
-          logger.info(`Response contains ${response.pages.length} pages`);
-        } else if (response.document && response.document.pages) {
-          logger.info(`Response contains ${response.document.pages.length} pages in document.pages`);
-        } else if (response.text) {
-          logger.info(`Response contains text of length: ${response.text.length}`);
-        } else {
-          logger.warn(`Response doesn't contain standard page content, full keys: ${JSON.stringify(response).substring(0, 200)}...`);
-        }
-        
-        return response;
-      } catch (error) {
-        lastError = error as Error;
-        
-        // Log the error
-        logger.warn(`Mistral OCR API call failed (attempt ${attempts}): ${lastError.message}`);
-        
-        // If we've reached the max retries, throw the error
-        if (attempts >= config.processing.maxRetries) {
-          break;
-        }
-        
-        // Exponential backoff delay
-        const delay = config.processing.retryDelayMs * Math.pow(2, attempts - 1);
-        logger.info(`Retrying in ${delay}ms...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-
-    throw new MistralApiError(`Failed to call Mistral OCR API after ${attempts} attempts: ${lastError?.message}`, 'ocr', 429);
-  }
-
-  /**
-   * Parse Mistral OCR response into pages
-   * 
-   * @param response - Response from Mistral OCR API
-   * @returns Array of page objects with content
-   */
-  private parseOcrResponseIntoPages(response: MistralOCRResponse): { pageNumber: number; content: string }[] {
-    try {
-      logger.debug(`OCR Response: ${JSON.stringify(response).substring(0, 200)}...`);
-      
-      // Check if the response has the expected format
-      if (!response) {
-        logger.error('Empty OCR response received');
-        return [{ pageNumber: 1, content: '' }];
-      }
-      
-      // The Mistral OCR API might return data in different formats depending on the version
-      // Let's check all possible paths to find page content
-      
-      // Option 1: Format with pages array
-      if (response.pages && Array.isArray(response.pages)) {
-        return response.pages.map((page: any, index: number) => {
-          // Extract the content from the OCR response
-          // Check for markdown field first, then text or content
-          const content = page.markdown || page.text || page.content || '';
-          
-          return {
-            pageNumber: page.index || index + 1,
-            content,
-          };
-        });
-      }
-      
-      // Option 2: Format with document.pages
-      if (response.document && response.document.pages && Array.isArray(response.document.pages)) {
-        return response.document.pages.map((page: any, index: number) => {
-          // Check for markdown field first, then text or content
-          const content = page.markdown || page.text || page.content || '';
-          
-          return {
-            pageNumber: page.index || page.number || index + 1,
-            content,
-          };
-        });
-      }
-      
-      // Option 3: Format with json_output property
-      if (response.json_output) {
-        try {
-          const jsonOutput = typeof response.json_output === 'string' 
-            ? JSON.parse(response.json_output) 
-            : response.json_output;
-            
-          if (jsonOutput.pages && Array.isArray(jsonOutput.pages)) {
-            return jsonOutput.pages.map((page: any, index: number) => ({
-              pageNumber: page.page_number || index + 1,
-              content: page.markdown || page.text || page.content || '',
-            }));
-          }
-        } catch (jsonError) {
-          logger.error(`Error parsing json_output: ${(jsonError as Error).message}`);
-        }
-      }
-      
-      // Option 4: Format with raw 'text' property for each page
-      if (response.text) {
-        // This might be a single page or the whole document text
-        // Try to split by formfeed character or page markers
-        const pages = String(response.text).split(/\f|---Page \d+---/);
-        if (pages.length > 1) {
-          return pages.map((content, index) => ({
-            pageNumber: index + 1,
-            content: content.trim(),
-          }));
-        }
-        
-        // Single page document
-        return [{ pageNumber: 1, content: String(response.text) }];
-      }
-      
-      // Option 5: Check for markdown field directly
-      if (response.markdown) {
-        return [{ pageNumber: 1, content: String(response.markdown) }];
-      }
-      
-      // Log the actual response structure to help debug
-      logger.warn(`Unexpected OCR response format: ${JSON.stringify(Object.keys(response))}`);
-      
-      // If no other format matches, try to extract any text we can find
-      const fallbackContent = response.markdown || 
-                             response.text || 
-                             (response.content ? JSON.stringify(response.content) : '') ||
-                             JSON.stringify(response);
-      
-      return [{ pageNumber: 1, content: fallbackContent }];
-    } catch (error) {
-      logger.error(`Error parsing OCR response: ${(error as Error).message}`);
-      // Return a default response with the raw JSON as content
-      return [{ pageNumber: 1, content: JSON.stringify(response) }];
-    }
-  }
-
-  /**
-   * Detect the file type from file buffer
-   */
-  private async detectFileType(fileBuffer: Buffer): Promise<string> {
-    // Simple file type detection based on magic numbers
-    if (fileBuffer.length < 4) {
-      return 'application/octet-stream';
-    }
-
-    // Check for PDF signature
-    if (fileBuffer[0] === 0x25 && fileBuffer[1] === 0x50 && 
-        fileBuffer[2] === 0x44 && fileBuffer[3] === 0x46) {
-      return 'application/pdf';
-    }
-    
-    // Check for common image formats
-    if (fileBuffer[0] === 0xFF && fileBuffer[1] === 0xD8) {
-      return 'image/jpeg';
-    }
-    
-    if (fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && 
-        fileBuffer[2] === 0x4E && fileBuffer[3] === 0x47) {
-      return 'image/png';
-    }
-    
-    // Check for text files (look for printable ASCII characters)
-    const isTextFile = fileBuffer.slice(0, Math.min(fileBuffer.length, 1000)).every(
-      byte => (byte >= 32 && byte <= 126) || [9, 10, 13].includes(byte)
-    );
-    
-    if (isTextFile) {
-      return 'text/plain';
-    }
-    
-    // Default response for unknown formats
-    return 'application/octet-stream';
-  }
-
-  /**
-   * Process a PDF by first converting it to high-resolution images, then running OCR on each image
-   * 
-   * @param pdfPath - Path to the PDF file
-   * @param options - OCR processing options
-   * @returns Promise with OCR processing result
-   */
-  private async processPdfWithImageConversion(
-    pdfPath: string,
-    options: OCRProcessingOptions
-  ): Promise<OCRProcessingResult> {
-    try {
-      logger.info(`Processing PDF with image conversion: ${path.basename(pdfPath)}`);
-      
-      // Create temp directory for the converted images
-      const tempDir = path.join(config.paths.tempDir, 'pdf_images');
-      await fs.ensureDir(tempDir);
-      
-      // Set DPI based on options or default to 300 DPI
-      const dpi = options.imageDpi || 300;
-      logger.info(`Converting PDF to images at ${dpi} DPI`);
-      
-      // Convert PDF to images
-      const imageFiles = await processPdfInBatches(pdfPath, tempDir, {
-        dpi,
-        format: 'png',
-        batchSize: 10
-      });
-      
-      // Handle case where no images were generated
-      if (imageFiles.length === 0) {
-        logger.warn(`No images were generated from PDF. Falling back to direct OCR processing.`);
-        
-        // Try processing the PDF directly as a fallback
-        try {
-          const directResult = await this.processPDF(pdfPath, options);
-          
-          // Add preprocessing method to indicate the fallback
-          directResult.metadata.preprocessingMethod = 'pdf-to-image-failed-fallback-to-direct';
-          
-          return directResult;
-        } catch (directError) {
-          logger.error(`Fallback to direct OCR also failed: ${(directError as Error).message}`);
-          
-          // Return empty result if both methods fail
-          return {
-            success: false,
-            text: '',
-            pages: [],
-            metadata: {
-              documentName: path.basename(pdfPath),
-              processedAt: new Date().toISOString(),
-              pageCount: 0,
-              processingTimeMs: 0,
-              apiCallCount: 0,
-              preprocessingMethod: 'pdf-to-image-failed-no-fallback'
-            },
-          };
-        }
-      }
-      
-      logger.info(`Converted PDF to ${imageFiles.length} images. Processing images with OCR.`);
-      
-      // Process each image with OCR
-      const pageResults = [];
-      let apiCallCount = 0;
-      
-      for (let i = 0; i < imageFiles.length; i++) {
-        const imagePath = imageFiles[i];
-        const pageNumber = i + 1;
-        
-        logger.info(`Processing image ${i + 1}/${imageFiles.length} with OCR: ${path.basename(imagePath)}`);
-        
-        // Process the image with Mistral OCR
-        const imageResult = await this.processImage(imagePath, options);
-        apiCallCount += imageResult.metadata.apiCallCount;
-        
-        // Get the content from the first page of the image result
-        const content = imageResult.pages[0]?.content || '';
-        
-        // Add to the results
-        pageResults.push({
-          pageNumber,
-          content
-        });
-        
-        // Clean up the image file if needed
-        if (options.preserveStructure !== true) {
-          await fs.remove(imagePath);
-        }
-      }
-      
-      // Clean up the temp directory if all images were processed
-      if (options.preserveStructure !== true) {
-        try {
-          await fs.rmdir(path.dirname(imageFiles[0]));
-        } catch (error) {
-          logger.warn(`Could not remove temp directory: ${error}`);
-        }
-      }
-      
-      // Compile the results
-      return {
-        success: true,
-        text: pageResults.map(p => p.content).join('\n\n'),
-        pages: pageResults,
-        metadata: {
-          documentName: path.basename(pdfPath),
-          processedAt: new Date().toISOString(),
-          pageCount: pageResults.length,
-          processingTimeMs: 0, // Will be updated by calling method
-          apiCallCount: apiCallCount,
-          preprocessingMethod: 'pdf-to-image'
-        },
-      };
-    } catch (error) {
-      logger.error(`Error processing PDF with image conversion: ${(error as Error).message}`);
-      throw new DocProcessingError(`Failed to process PDF with image conversion: ${(error as Error).message}`, 'pdf-image-conversion', pdfPath);
+      logger.error(`Error processing document with Mistral OCR: ${error.message}`);
+      throw error;
     }
   }
 
   /**
    * Process an image from a URL with Mistral OCR
-   * 
-   * @param imageUrl - URL of the image to process
-   * @param options - OCR processing options
-   * @returns Promise with OCR processing result
    */
   public async processImageUrl(
     imageUrl: string,
     options: OCRProcessingOptions = {}
   ): Promise<OCRProcessingResult> {
+    const startTime = Date.now();
+    const mergedOptions = { ...this.defaultOptions, ...options };
+    
     try {
-      const startTime = Date.now();
-      const mergedOptions = { ...this.defaultOptions, ...options };
-      
       logger.info(`Processing image from URL: ${imageUrl}`);
       
-      // Process the image directly with Mistral OCR
-      const response = await this.callMistralOCRWithRetry({
+      // Create document object separately to ensure all fields are present
+      const documentObject = {
+        type: "document_url",
+        document_url: imageUrl,
+        document_name: new URL(imageUrl).pathname.split('/').pop() || 'image.jpg'
+      };
+      
+      logger.info(`Processing document named: ${documentObject.document_name || 'unnamed'}`);
+      
+      // Make the API call using the OCR endpoint with document_url format
+      const requestBody = {
         model: "mistral-ocr-latest",
-        document: {
-          type: "image_url",
-          imageUrl: imageUrl,
+        document: documentObject,
+        preserve_structure: mergedOptions.preserveStructure !== undefined ? mergedOptions.preserveStructure : true,
+        output_format: mergedOptions.outputFormat || 'markdown',
+        enhance_tables: mergedOptions.enhanceTablesMarkdown !== undefined ? mergedOptions.enhanceTablesMarkdown : true,
+        include_image_base64: mergedOptions.includeImageBase64
+      };
+      
+      // Log the request structure
+      logger.info(`OCR request being sent: ${JSON.stringify(requestBody)}`);
+      
+      logger.info(`Sending request to Mistral OCR API...`);
+      const response = await axios.post(`${this.ocr.apiBaseUrl}/ocr`, requestBody, {
+        headers: {
+          'Authorization': `Bearer ${process.env.MISTRAL_API_KEY}`,
+          'Content-Type': 'application/json'
         },
-        includeImageBase64: options.includeImageBase64,
-        // Add enhanced options for better text extraction
-        preferMarkdown: options.outputFormat === 'markdown',
-        enhanceTables: options.enhanceTablesMarkdown,
-        preserveStructure: options.preserveStructure,
-        // Set OCR mode based on highQuality option
-        ocrMode: options.highQuality ? "high_quality" : "standard"
+        timeout: 60000 // 1 minute timeout for image processing
       });
       
-      // Add debug logging for the response
-      logger.info(`OCR response type: ${typeof response}`);
-      logger.info(`OCR response keys: ${Object.keys(response).join(', ')}`);
+      logger.info(`Received response from Mistral OCR API`);
+      const apiResponse = response.data;
       
-      // Parse the response into pages
-      const pages = this.parseOcrResponseIntoPages(response);
+      // Extract pages from the response
+      const pages = this.parseOcrResponseIntoPages(apiResponse);
       
-      // Check if any content was extracted
-      const hasContent = pages.some(page => page.content && page.content.trim().length > 0);
-      if (!hasContent) {
-        logger.warn(`No text content was extracted from image URL: ${imageUrl}`);
-        logger.warn(`This might be due to image quality, handwritten text, or unsupported format`);
+      // Extract text from the response
+      let text = '';
+      if (apiResponse.text) {
+        text = apiResponse.text;
+      } else if (apiResponse.markdown) {
+        text = apiResponse.markdown;
+      } else if (pages.length > 0) {
+        // Combine all page content
+        text = pages.map(p => p.content).join('\n\n');
       }
       
       return {
         success: true,
-        text: pages.map(p => p.content).join('\n\n'),
-        pages,
+        text: text,
+        pages: pages,
         metadata: {
           documentName: new URL(imageUrl).pathname.split('/').pop() || 'image',
           processedAt: new Date().toISOString(),
           pageCount: pages.length,
           processingTimeMs: Date.now() - startTime,
-          apiCallCount: 1,
-        },
+          apiCallCount: 1
+        }
       };
-    } catch (error) {
-      logger.error(`Error processing image URL: ${(error as Error).message}`);
-      throw new DocProcessingError(`Failed to process image URL: ${(error as Error).message}`, 'image-url-processing', imageUrl);
+    } catch (error: any) {
+      // Detailed error logging
+      if (error.response) {
+        // The request was made and the server responded with a status code
+        // that falls out of the range of 2xx
+        logger.error(`API Error Response - Status: ${error.response.status}`);
+        logger.error(`Error Data: ${JSON.stringify(error.response.data, null, 2)}`);
+        logger.error(`Error Headers: ${JSON.stringify(error.response.headers, null, 2)}`);
+      } else if (error.request) {
+        // The request was made but no response was received
+        logger.error(`No response received: ${error.request}`);
+      } else {
+        // Something happened in setting up the request that triggered an Error
+        logger.error(`Error setting up request: ${error.message}`);
+      }
+      
+      logger.error(`Error processing image from URL: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Convert OCR response to pages
+   */
+  public parseOcrResponseIntoPages(response: any): ExtractedPage[] {
+    try {
+      if (!response) {
+        logger.error('Empty OCR response received');
+        return [{
+          pageNumber: 1,
+          content: '',
+          markdown: '',
+          confidence: 0
+        }];
+      }
+
+      // For Mistral OCR API - it returns an array of pages
+      if (response.pages && Array.isArray(response.pages)) {
+        logger.info(`Found ${response.pages.length} pages in OCR response`);
+        
+        return response.pages.map((page: any, index: number) => {
+          // Look for page number in various possible fields
+          const pageNumber = page.page_number || page.index || index + 1;
+          
+          // Look for content in text field first, then try other possible field names
+          const content = page.text || '';
+          
+          // Look for markdown in markdown field
+          const markdown = page.markdown || content;
+          
+          return {
+            pageNumber,
+            content,
+            markdown,
+            confidence: page.confidence || 0.0
+          };
+        });
+      } 
+      
+      // If no pages array is found, create a single page from available content
+      logger.warn('No pages array found in OCR response, creating single page');
+      
+      const content = response.text || 
+                      response.content || 
+                      response.document_text ||
+                      (response.document?.text) || 
+                      '';
+                      
+      return [{
+        pageNumber: 1,
+        content: content,
+        markdown: response.markdown || content,
+        confidence: response.confidence || 0.0
+      }];
+    } catch (error: any) {
+      logger.error(`Error parsing OCR response: ${error.message}`);
+      logger.error('Returning empty page due to parsing error');
+      
+      return [{
+        pageNumber: 1,
+        content: '',
+        markdown: '',
+        confidence: 0
+      }];
     }
   }
 }

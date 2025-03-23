@@ -1,6 +1,0 @@
-Prompt Name,Accuracy %,Notes
-pattern_matching,95.0,Best performing
-two_step_reasoning,95.0,Correctly handled RIDER_CLAUSES
-baseline,90.0,Simple prompt
-detailed_types,90.0,Good with CHARTER_PARTY
-context_focused,90.0,Similar to baseline
