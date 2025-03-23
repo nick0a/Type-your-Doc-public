@@ -13,10 +13,17 @@
     "test:phase": "jest src/tests/phaseValidation.test.ts",
     "test:simple": "jest src/tests/simple.test.ts",
     "test:document": "ts-node src/tests/documentTest.ts",
+    "test:pdf2img": "ts-node src/tests/testPdfToImage.ts",
     "evaluate": "ts-node src/evaluation/runClassificationEvaluation.ts",
     "test:evaluate": "ts-node src/evaluation/testEvaluation.ts",
     "create:validation": "ts-node src/evaluation/classification/createValidationDataset.ts",
-    "run:validation": "ts-node src/evaluation/createAndRunValidation.ts"
+    "run:validation": "ts-node src/evaluation/createAndRunValidation.ts",
+    "ocr:test": "ts-node src/evaluation/runMistralOCRTest.ts",
+    "ocr:random": "ts-node src/evaluation/runMistralOCRTest.ts --random",
+    "ocr:pdf2img": "ts-node src/evaluation/runMistralOCRTest.ts --pdf-to-image",
+    "run:pdf2ocr": "NODE_ENV=production ts-node src/tests/runPdf2ImageOcr.ts",
+    "ocr:image-url": "ts-node src/tests/runImageUrlOcr.ts",
+    "ocr:image-url-custom": "ts-node src/tests/runImageUrlOcr.ts"
   },
   "dependencies": {
     "@mistralai/mistralai": "^1.5.2",
@@ -26,6 +33,7 @@
     "dotenv": "^16.4.7",
     "fast-csv": "^5.0.2",
     "fs-extra": "^11.2.0",
+    "node-poppler": "^7.2.4",
     "papaparse": "^5.5.2",
     "reflect-metadata": "^0.2.2"
   },
