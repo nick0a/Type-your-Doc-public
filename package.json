@@ -8,10 +8,14 @@
     "build": "tsc",
     "ocr:simple": "ts-node simpleOCR.ts",
     "classify:sof": "ts-node classifySOF.ts",
+    "newmistral:build": "tsc -p newMistral/tsconfig.json",
+    "newmistral:start": "ts-node newMistral/src/simpleSofExtraction.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
     "axios": "^1.6.2",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.14.1",
     "dotenv": "^16.3.1"
   },
   "devDependencies": {
