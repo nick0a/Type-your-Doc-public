@@ -83,8 +83,18 @@ export class MistralOCRProcessor {
       throw new DocProcessingError(`File not found: ${filePath}`, 'document-validation', filePath);
     }
 
+    // Check file MIME type before processing
     try {
       const fileExt = path.extname(filePath).toLowerCase();
+      const fileBuffer = await fs.readFile(filePath);
+      const fileType = await this.detectFileType(fileBuffer);
+
+      // Check if this is a text file being passed as PDF
+      if (fileType === 'text/plain' && ['.pdf', '.docx', '.pptx'].includes(fileExt)) {
+        logger.warn(`File ${filePath} has extension ${fileExt} but is actually a text file. Using text processing instead.`);
+        return this.processTextFile(filePath, mergedOptions);
+      }
+      
       let result: OCRProcessingResult;
 
       if (['.pdf'].includes(fileExt)) {
@@ -457,6 +467,44 @@ export class MistralOCRProcessor {
       // Return a default response with the raw JSON as content
       return [{ pageNumber: 1, content: JSON.stringify(response) }];
     }
+  }
+
+  /**
+   * Detect the file type from file buffer
+   */
+  private async detectFileType(fileBuffer: Buffer): Promise<string> {
+    // Simple file type detection based on magic numbers
+    if (fileBuffer.length < 4) {
+      return 'application/octet-stream';
+    }
+
+    // Check for PDF signature
+    if (fileBuffer[0] === 0x25 && fileBuffer[1] === 0x50 && 
+        fileBuffer[2] === 0x44 && fileBuffer[3] === 0x46) {
+      return 'application/pdf';
+    }
+    
+    // Check for common image formats
+    if (fileBuffer[0] === 0xFF && fileBuffer[1] === 0xD8) {
+      return 'image/jpeg';
+    }
+    
+    if (fileBuffer[0] === 0x89 && fileBuffer[1] === 0x50 && 
+        fileBuffer[2] === 0x4E && fileBuffer[3] === 0x47) {
+      return 'image/png';
+    }
+    
+    // Check for text files (look for printable ASCII characters)
+    const isTextFile = fileBuffer.slice(0, Math.min(fileBuffer.length, 1000)).every(
+      byte => (byte >= 32 && byte <= 126) || [9, 10, 13].includes(byte)
+    );
+    
+    if (isTextFile) {
+      return 'text/plain';
+    }
+    
+    // Default response for unknown formats
+    return 'application/octet-stream';
   }
 }
 
