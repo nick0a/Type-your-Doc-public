@@ -118,7 +118,7 @@ The system can be configured through environment variables:
 - `MISTRAL_API_KEY`: Your Mistral AI API key
 - `ANTHROPIC_API_KEY`: Your Anthropic API key
 - `MISTRAL_MODEL`: Mistral model to use (default: mistral-ocr-latest)
-- `ANTHROPIC_MODEL`: Anthropic model to use (default: claude-3-sonnet-20240229)
+- `ANTHROPIC_MODEL`: Anthropic model to use (default: claude-3-7-sonnet-20250219)
 - `CONCURRENCY`: Maximum number of concurrent operations (default: 4)
 - `BATCH_SIZE`: Number of items per batch (default: 2)
 - `MAX_RETRIES`: Maximum number of retries for failed operations (default: 3)

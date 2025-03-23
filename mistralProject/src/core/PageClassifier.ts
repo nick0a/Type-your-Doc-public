@@ -3,7 +3,9 @@
  */
 import { AnthropicClient } from '../utils/AnthropicClient';
 import { logger } from '../utils/logger';
+import emojiLogger from '../utils/emojiLogger';
 import { config } from '../config';
+import path from 'path';
 import { 
   PageClassificationResult, 
   ClassifiedDocument 
@@ -28,7 +30,7 @@ export class PageClassifier {
       ocrResult: any
     }
   ): Promise<any> {
-    logger.info(`Classifying document: ${document.originalPath}`);
+    emojiLogger.document(`Classifying document: ${document.originalPath}`);
     
     // Extract page content from OCR result
     const pages = document.ocrResult.pages.map((page: any) => page.text || '');
@@ -47,6 +49,8 @@ export class PageClassifier {
       };
     });
     
+    emojiLogger.success(`Classified document with ${classifiedPages.filter(p => p.type === 'SOF').length} SOF pages`);
+    
     // Return in expected format
     return {
       originalPath: document.originalPath,
@@ -62,7 +66,7 @@ export class PageClassifier {
     pages: string[], 
     documentId: string
   ): Promise<ClassifiedDocument> {
-    logger.info(`Classifying ${pages.length} pages for document ${documentId}`);
+    emojiLogger.classify(`Classifying ${pages.length} pages for document ${documentId}`);
     
     const results: PageClassificationResult[] = [];
     const sofPages: number[] = [];
@@ -71,7 +75,7 @@ export class PageClassifier {
     // Process pages in sequence (could be parallel in production)
     for (let i = 0; i < pages.length; i++) {
       try {
-        logger.debug(`Classifying page ${i+1}/${pages.length}`);
+        emojiLogger.progress(i+1, pages.length, `Classifying page of document ${path.basename(documentId)}`);
         
         // Get classification with confidence score
         const { isSOFPage, confidence } = await this.classifySinglePage(pages[i], i);
@@ -87,11 +91,13 @@ export class PageClassifier {
         // Track page type
         if (isSOFPage) {
           sofPages.push(i);
+          emojiLogger.success(`Page ${i+1} classified as SOF with confidence ${(confidence || 0).toFixed(3)}`);
         } else {
           nonSofPages.push(i);
+          emojiLogger.info(`Page ${i+1} classified as non-SOF with confidence ${(confidence || 0).toFixed(3)}`);
         }
       } catch (error) {
-        logger.error(`Error classifying page ${i}:`, error);
+        emojiLogger.error(`Error classifying page ${i}:`, error);
         // On error, mark as not an SOF page to be safe
         results.push({
           pageIndex: i,
@@ -103,7 +109,7 @@ export class PageClassifier {
       }
     }
     
-    logger.info(`Classification complete for document ${documentId}: ` +
+    emojiLogger.success(`Classification complete for document ${documentId}: ` +
                 `${sofPages.length} SOF pages, ${nonSofPages.length} non-SOF pages`);
     
     return {
@@ -123,10 +129,16 @@ export class PageClassifier {
     pageIndex: number
   ): Promise<{ isSOFPage: boolean; confidence?: number }> {
     try {
+      const startTime = Date.now();
+      emojiLogger.apiCall(`Classifying page ${pageIndex + 1}`);
+      
       // Request classification with confidence
       const result = await this.client.classifyContent(pageContent, { 
         confidenceRequired: true 
       });
+      
+      const responseTime = Date.now() - startTime;
+      emojiLogger.apiResponse(`Received classification for page ${pageIndex + 1}`, responseTime);
       
       const isSOFPage = result.classification === 'SOF_PAGE';
       const confidence = result.confidence || 0.5;
@@ -138,11 +150,11 @@ export class PageClassifier {
         // (better to include a non-SOF page than miss an SOF page)
         finalClassification = isSOFPage && confidence > 0.3;
         
-        logger.debug(`Low confidence (${confidence}) classification for page ${pageIndex}: ` +
+        emojiLogger.warn(`Low confidence (${confidence.toFixed(3)}) classification for page ${pageIndex}: ` +
                     `${isSOFPage ? 'SOF' : 'non-SOF'} → ${finalClassification ? 'SOF' : 'non-SOF'}`);
       } else {
-        logger.debug(`Page ${pageIndex} classified as ${isSOFPage ? 'SOF' : 'non-SOF'} ` +
-                    `with confidence ${confidence}`);
+        emojiLogger.debug(`Page ${pageIndex} classified as ${isSOFPage ? 'SOF' : 'non-SOF'} ` +
+                    `with confidence ${confidence.toFixed(3)}`);
       }
       
       return { 
@@ -150,7 +162,7 @@ export class PageClassifier {
         confidence 
       };
     } catch (error) {
-      logger.error(`Classification error for page ${pageIndex}:`, error);
+      emojiLogger.error(`Classification error for page ${pageIndex}:`, error);
       // Default to not an SOF page on error
       return { isSOFPage: false };
     }
@@ -188,6 +200,8 @@ export class PageClassifier {
     if (currentBlock.length > 0) {
       blocks.push(currentBlock);
     }
+    
+    emojiLogger.info(`Found ${blocks.length} contiguous blocks of SOF pages`);
     
     return blocks;
   }

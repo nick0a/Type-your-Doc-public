@@ -5,7 +5,7 @@ export const config = {
   // Anthropic API configuration
   anthropic: {
     apiKey: process.env.ANTHROPIC_API_KEY || '',
-    model: process.env.ANTHROPIC_MODEL || 'claude-3-sonnet-20240229',
+    model: process.env.ANTHROPIC_MODEL || 'claude-3-7-sonnet-20250219',
     maxRetries: parseInt(process.env.ANTHROPIC_MAX_RETRIES || '3', 10),
     timeout: parseInt(process.env.ANTHROPIC_TIMEOUT || '60000', 10),
     baseUrl: process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com',
