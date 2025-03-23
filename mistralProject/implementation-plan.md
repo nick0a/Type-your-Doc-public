@@ -364,7 +364,85 @@ The output will be JSON data containing event descriptions, dates, times, and st
   - Successfully processes various SOF formats
   - Correctly handles edge cases like handwritten content
 
-### Phase 5: Event Standardization & Comparison
+### Phase 5: Page Classification Testing and Evaluation Framework
+
+**Objective:** Implement a comprehensive testing and evaluation framework specifically for SOF page classification, inspired by the Python vision document classifier.
+
+#### Tasks:
+
+1. Build validation dataset management
+   - Create a structured dataset of labeled pages (AGENT SOF, Master SOF, OTHER)
+   - Implement functions to load and manage test document sets
+   - Add tools for creating and updating ground truth labels
+   - Set up dataset versioning and management
+   - Create a validation CSV with file paths and expected classifications
+
+2. Implement classification metrics collection
+   - Create functions to track classification accuracy, precision, and recall
+   - Implement confusion matrix generation for SOF page types
+   - Add detailed tracking of true/false positives and negatives
+   - Build visualization tools for classification performance
+   - Calculate and display accuracy percentages per classification type
+
+3. Develop prompt iteration and testing system
+   - Create a framework for testing multiple prompt variations
+   - Implement A/B testing for classification prompts
+   - Add tools to compare prompt performance across datasets
+   - Build a prompt library with version tracking
+   - Store prompt templates in separate files for easy modification
+
+4. Create API performance tracking
+   - Implement detailed timing measurements for each API call
+   - Add cost tracking for both Mistral OCR and Claude APIs
+   - Create functions to estimate cost per document/page
+   - Track retry counts and API errors
+   - Implement exponential backoff for rate limiting
+
+5. Build comprehensive reporting system
+   - Implement detailed CSV exports of all test results
+   - Create JSON summary reports with key metrics
+   - Add visualization capabilities for performance trends
+   - Implement cost analysis reports
+   - Generate timestamped reports with run configurations
+
+#### Implementation Details:
+
+- **Model Selection UI:** Implement a simple command-line interface to select between different models for testing (similar to the Python code's model selection)
+- **Parallel Processing:** Add configurable concurrency settings to test multiple documents simultaneously
+- **Retry Logic:** Implement exponential backoff for failed API calls with detailed error logging
+- **Cost Tracking:** Calculate and display estimated costs based on token/page usage for each model
+- **Results Storage:** Automatically save test results in structured JSON and CSV formats with timestamps
+
+#### Testing:
+
+- **Dataset Validation:**
+  - Verify proper loading and management of test datasets
+  - Test with various document formats and SOF types
+  - Confirm correct handling of ground truth labels
+
+- **Metrics Accuracy:**
+  - Validate classification metrics against manual verification
+  - Test edge cases in classification results
+  - Verify accuracy calculations across different page types
+
+- **Prompt Testing:**
+  - Test multiple prompt variations with consistent datasets
+  - Verify performance differences are accurately tracked
+  - Confirm reproducibility of test results
+
+- **Cost Tracking:**
+  - Validate cost calculations against actual API usage
+  - Test accuracy of page-level and document-level cost estimates
+  - Verify aggregation of costs across test batches
+
+- **Success Criteria:**
+  - Successfully distinguishes between AGENT SOF and Master SOF pages with >95% accuracy
+  - Enables data-driven optimization of classification prompts
+  - Provides comprehensive reporting on classification performance
+  - Tracks API costs accurately for both Mistral OCR and Claude
+  - Supports iterative improvement of the classification system
+
+### Phase 6: Event Standardization & Comparison
 
 **Objective:** Implement event standardization and comparison functionality to match the existing system.
 
@@ -413,7 +491,7 @@ The output will be JSON data containing event descriptions, dates, times, and st
   - Generates comparison tables matching existing format
   - Handles edge cases like missing events
 
-### Phase 6: Pipeline Integration & Batch Processing
+### Phase 7: Pipeline Integration & Batch Processing
 
 **Objective:** Integrate all components into a complete pipeline and implement batch processing.
 
@@ -472,7 +550,62 @@ The output will be JSON data containing event descriptions, dates, times, and st
   - Generates correct output for the complete process
   - Meets performance targets for batch processing
 
-### Phase 7: Optimization & Finalization
+### Phase 8: Evaluation Framework & Performance Metrics
+
+**Objective:** Implement a comprehensive evaluation framework to measure and improve overall system performance beyond just page classification.
+
+#### Tasks:
+
+1. Implement system-level performance metrics
+   - Create functions to track overall processing time
+   - Implement cost tracking for system-level operations
+   - Add detailed logging for system-level events
+   - Build visualization tools for system-level performance
+
+2. Develop system-level error handling
+   - Implement enhanced error recovery strategies
+   - Add more detailed error reporting
+   - Implement system-level retry logic
+
+3. Build system-level monitoring
+   - Create comprehensive system-level metrics
+   - Implement usage statistics
+   - Add cost analysis for system-level operations
+
+4. Develop system-level documentation
+   - Create technical documentation
+   - Add usage examples
+   - Document system-level configuration options
+
+5. Perform final testing
+   - Conduct comprehensive validation
+   - Test with edge cases
+   - Verify compatibility with existing systems
+
+#### Testing:
+
+- **Performance Testing:**
+  - Measure processing times before and after optimization
+  - Test with large document sets
+  - Verify resource usage is optimized
+
+- **Reliability Testing:**
+  - Test continuous operation with multiple batches
+  - Verify correct handling of sustained load
+  - Confirm error recovery under various conditions
+
+- **Integration Testing:**
+  - Verify seamless integration with existing systems
+  - Test compatibility with downstream processes
+  - Confirm output format meets all requirements
+
+- **Success Criteria:**
+  - Meets or exceeds performance targets
+  - Successfully processes all test documents
+  - Generates output fully compatible with existing systems
+  - Documentation covers all aspects of the system
+
+### Phase 9: Optimization & Finalization
 
 **Objective:** Optimize the system for performance and reliability.
 

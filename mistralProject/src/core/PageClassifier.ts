@@ -8,6 +8,7 @@ import {
   PageClassificationResult, 
   ClassifiedDocument 
 } from '../models/PageClassification';
+import { ClassifiedPage } from '../models/sofTypes';
 
 export class PageClassifier {
   private client: AnthropicClient;
@@ -16,6 +17,42 @@ export class PageClassifier {
   constructor(client?: AnthropicClient) {
     this.client = client || new AnthropicClient();
     this.confidenceThreshold = config.classification.confidenceThreshold;
+  }
+  
+  /**
+   * Classifies an OCR-processed document
+   */
+  async classifyDocument(
+    document: {
+      originalPath: string,
+      ocrResult: any
+    }
+  ): Promise<any> {
+    logger.info(`Classifying document: ${document.originalPath}`);
+    
+    // Extract page content from OCR result
+    const pages = document.ocrResult.pages.map((page: any) => page.text || '');
+    const documentId = document.originalPath;
+    
+    // Use the existing classifyPages method to classify all pages
+    const classification = await this.classifyPages(pages, documentId);
+    
+    // Convert to expected format with classified pages
+    const classifiedPages: ClassifiedPage[] = classification.results.map((result, index) => {
+      return {
+        index,
+        type: result.isSOFPage ? 'SOF' : 'OTHER',
+        content: result.pageContent,
+        confidence: result.confidence || 0.5
+      };
+    });
+    
+    // Return in expected format
+    return {
+      originalPath: document.originalPath,
+      ocrResult: document.ocrResult,
+      pages: classifiedPages
+    };
   }
   
   /**
@@ -153,5 +190,15 @@ export class PageClassifier {
     }
     
     return blocks;
+  }
+
+  /**
+   * Public method to classify a single page (for evaluation purposes)
+   */
+  public async classifyPage(
+    pageContent: string, 
+    pageIndex: number
+  ): Promise<{ isSOFPage: boolean; confidence?: number }> {
+    return this.classifySinglePage(pageContent, pageIndex);
   }
 } 
