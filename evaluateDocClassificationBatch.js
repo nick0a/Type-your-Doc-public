@@ -1,11 +1,12 @@
-// evaluateDocClassification.js
-// Purpose: Evaluate document classification against validated dataset
+// evaluateDocClassificationBatch.js (v2.0)
+// Purpose: Evaluate document classification against validated dataset for multiple documents
 
 require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 const Papa = require('papaparse');
+const readline = require('readline');
 const { processDocument } = require('./newMistral');
 
 // Get API keys from environment variables
@@ -34,6 +35,21 @@ const DOCUMENT_DIRS = [
   path.join(__dirname, 'validationData', 'Agent&MasterSOFs'),
   path.join(__dirname, 'Agent&MasterSOFs')
 ];
+
+// Helper function for user input
+function getUserInput(question) {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  
+  return new Promise(resolve => {
+    rl.question(question, answer => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
 
 // Helper function to read validation dataset
 function loadValidationDataset() {
@@ -220,58 +236,28 @@ function findBestMatchingDocument(filename, documentDir) {
 }
 
 // Main function to evaluate a document
-async function evaluateDocument(documentIndex) {
+async function evaluateDocument(documentFilename, documentDir, validationDataset) {
   try {
-    // Load validation dataset
-    const validationDataset = loadValidationDataset();
-    const validDocuments = Object.keys(validationDataset);
-    
-    if (validDocuments.length === 0) {
-      console.error('Error: No documents found in validation dataset');
-      process.exit(1);
-    }
-    
-    // Find the document directory
-    const documentDir = findDocumentDirectory();
-    console.log(`Found document directory: ${documentDir}`);
-    
-    // Use all valid documents instead of filtering for SOF only
-    console.log(`Found ${validDocuments.length} documents in validation dataset`);
-    
-    // Select a document - either from index or random
-    let selectedDocumentFilename;
-    if (documentIndex !== undefined && documentIndex < validDocuments.length) {
-      selectedDocumentFilename = validDocuments[documentIndex];
-    } else {
-      // Random selection
-      const randomIndex = Math.floor(Math.random() * validDocuments.length);
-      selectedDocumentFilename = validDocuments[randomIndex];
-    }
-    
-    console.log(`Selected document from dataset: ${selectedDocumentFilename}`);
+    console.log(`\n📄 Processing document: ${documentFilename}`);
     
     // Find the actual file that best matches this filename
-    const documentPath = findBestMatchingDocument(selectedDocumentFilename, documentDir);
+    const documentPath = findBestMatchingDocument(documentFilename, documentDir);
     
     if (!documentPath) {
-      console.error(`Error: Could not find a matching file for ${selectedDocumentFilename}`);
-      console.log('Available files:');
-      fs.readdirSync(documentDir).forEach(file => {
-        console.log(`- ${file}`);
-      });
-      process.exit(1);
+      console.error(`❌ Error: Could not find a matching file for ${documentFilename}`);
+      return null;
     }
     
     console.log(`Found matching document: ${path.basename(documentPath)}`);
-    const expectedPages = validationDataset[selectedDocumentFilename];
+    const expectedPages = validationDataset[documentFilename];
     
     // Process document with Mistral OCR
-    console.log('\n🤖 Processing document with Mistral OCR...');
+    console.log('🤖 Processing document with Mistral OCR...');
     const ocrResult = await processDocument(documentPath);
     
     if (!ocrResult.success) {
-      console.error('Error processing document with Mistral OCR:', ocrResult.error);
-      process.exit(1);
+      console.error('❌ Error processing document with Mistral OCR:', ocrResult.error);
+      return null;
     }
     
     // Parse OCR results to get pages
@@ -279,7 +265,7 @@ async function evaluateDocument(documentIndex) {
     const ocrResponse = JSON.parse(fs.readFileSync(ocrResponsePath, 'utf8'));
     
     // Classify each page and evaluate accuracy
-    console.log('\n🧠 Classifying pages with Anthropic API...');
+    console.log('🧠 Classifying pages with Anthropic API...');
     
     const results = [];
     let totalPages = 0;
@@ -350,7 +336,7 @@ async function evaluateDocument(documentIndex) {
     
     // Generate results summary
     const summary = {
-      document: selectedDocumentFilename,
+      document: documentFilename,
       documentPath: documentPath,
       totalPages,
       correctPages,
@@ -377,15 +363,14 @@ async function evaluateDocument(documentIndex) {
     fs.writeFileSync(markdownPath, markdownReport);
     
     // Output summary to console
-    console.log('\n📊 Evaluation Results:');
-    console.log(`  - Document: ${selectedDocumentFilename}`);
+    console.log('\n📊 Document Evaluation Results:');
+    console.log(`  - Document: ${documentFilename}`);
     console.log(`  - File: ${path.basename(documentPath)}`);
     console.log(`  - Pages Processed: ${totalPages}`);
     console.log(`  - Correctly Classified Pages: ${correctPages} (${overallAccuracy.toFixed(2)}%)`);
     console.log(`  - SOF Pages Detected: ${totalSOFPages}`);
     console.log(`  - Correctly Classified SOF Pages: ${correctSOFPages} (${sofAccuracy.toFixed(2)}%)`);
-    console.log(`\n📝 Full results saved to: ${resultPath}`);
-    console.log(`📋 Markdown report saved to: ${markdownPath}`);
+    console.log(`  - Report saved to: ${markdownPath}`);
     
     return summary;
   } catch (error) {
@@ -394,7 +379,7 @@ async function evaluateDocument(documentIndex) {
   }
 }
 
-// Generate markdown report
+// Generate markdown report for a single document
 function generateMarkdownReport(summary) {
   const report = `# Document Classification Evaluation Report
 
@@ -422,33 +407,178 @@ For Statement of Facts (SOF) pages specifically, it correctly identified ${summa
   return report;
 }
 
-// Parse command line arguments
-function parseArgs() {
-  const args = process.argv.slice(2);
-  let documentIndex = undefined;
+// Generate markdown report for batch evaluation
+function generateBatchReport(results, timestamp) {
+  let totalPages = 0;
+  let totalCorrectPages = 0;
+  let totalSOFPages = 0;
+  let totalCorrectSOFPages = 0;
   
-  if (args.length > 0) {
-    const indexArg = parseInt(args[0]);
-    if (!isNaN(indexArg)) {
-      documentIndex = indexArg;
+  // Aggregate results
+  results.forEach(doc => {
+    if (doc) {
+      totalPages += doc.totalPages;
+      totalCorrectPages += doc.correctPages;
+      totalSOFPages += doc.totalSOFPages;
+      totalCorrectSOFPages += doc.correctSOFPages;
     }
-  }
+  });
   
-  return { documentIndex };
+  // Calculate overall metrics
+  const overallAccuracy = totalPages > 0 ? (totalCorrectPages / totalPages) * 100 : 0;
+  const sofAccuracy = totalSOFPages > 0 ? (totalCorrectSOFPages / totalSOFPages) * 100 : 0;
+  
+  const report = `# Batch Document Classification Evaluation Report
+
+## Overview
+- **Total Documents Processed:** ${results.filter(r => r !== null).length}
+- **Total Documents Failed:** ${results.filter(r => r === null).length}
+- **Total Pages Processed:** ${totalPages}
+- **Evaluation Date:** ${new Date().toISOString().split('T')[0]}
+
+## Summary Results
+- **Overall Accuracy:** ${totalCorrectPages}/${totalPages} (${overallAccuracy.toFixed(2)}% success rate)
+- **SOF Pages Accuracy:** ${totalCorrectSOFPages}/${totalSOFPages} (${sofAccuracy.toFixed(2)}% success rate)
+
+## Document Results
+
+| Document | Pages | Correct Pages | SOF Pages | Correct SOF Pages | Overall Accuracy | SOF Accuracy |
+|----------|-------|---------------|-----------|------------------|-----------------|-------------|
+${results.filter(r => r !== null).map(r => 
+  `| ${r.document} | ${r.totalPages} | ${r.correctPages} | ${r.totalSOFPages} | ${r.correctSOFPages} | ${r.overallAccuracy}% | ${r.sofAccuracy}% |`
+).join('\n')}
+
+## Conclusion
+The model successfully classified ${totalCorrectPages} out of ${totalPages} pages correctly across all documents, giving an overall accuracy of ${overallAccuracy.toFixed(2)}%.
+For Statement of Facts (SOF) pages specifically, it correctly identified ${totalCorrectSOFPages} out of ${totalSOFPages} pages, with an accuracy of ${sofAccuracy.toFixed(2)}%.
+`;
+
+  return report;
+}
+
+// Main function to run batch evaluation
+async function runBatchEvaluation() {
+  try {
+    // Load validation dataset
+    const validationDataset = loadValidationDataset();
+    const validDocuments = Object.keys(validationDataset);
+    
+    if (validDocuments.length === 0) {
+      console.error('Error: No documents found in validation dataset');
+      process.exit(1);
+    }
+    
+    // Find the document directory
+    const documentDir = findDocumentDirectory();
+    console.log(`Found document directory: ${documentDir}`);
+    
+    // Use all valid documents instead of filtering for SOF only
+    console.log(`\n🔎 Found ${validDocuments.length} documents in validation dataset`);
+    console.log(`\nAvailable document range: 1-${validDocuments.length}`);
+    
+    // Get number of documents to evaluate
+    const numDocsInput = await getUserInput(`\nHow many documents would you like to evaluate? (1-${validDocuments.length}): `);
+    const numDocs = parseInt(numDocsInput);
+    
+    if (isNaN(numDocs) || numDocs < 1 || numDocs > validDocuments.length) {
+      console.error(`Error: Please enter a valid number between 1 and ${validDocuments.length}`);
+      process.exit(1);
+    }
+    
+    console.log(`\n🚀 Starting batch evaluation of ${numDocs} documents...`);
+    
+    // Randomly select documents
+    const selectedDocuments = [];
+    const documentIndices = new Set();
+    
+    while (selectedDocuments.length < numDocs) {
+      const randomIndex = Math.floor(Math.random() * validDocuments.length);
+      if (!documentIndices.has(randomIndex)) {
+        documentIndices.add(randomIndex);
+        selectedDocuments.push(validDocuments[randomIndex]);
+      }
+    }
+    
+    // Process each document
+    const batchResults = [];
+    const batchStartTime = Date.now();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    
+    for (let i = 0; i < selectedDocuments.length; i++) {
+      console.log(`\n📄 Processing document ${i + 1}/${numDocs}: ${selectedDocuments[i]}`);
+      const docResult = await evaluateDocument(selectedDocuments[i], documentDir, validationDataset);
+      batchResults.push(docResult);
+    }
+    
+    // Calculate batch processing time
+    const batchEndTime = Date.now();
+    const processingTimeInMinutes = ((batchEndTime - batchStartTime) / 1000 / 60).toFixed(2);
+    
+    // Generate and save batch report
+    console.log('\n📊 Generating batch evaluation report...');
+    const batchReport = generateBatchReport(batchResults, timestamp);
+    const resultsOutputFolder = path.join(__dirname, 'results');
+    const batchReportPath = path.join(resultsOutputFolder, `${timestamp}_batch_evaluation_report.md`);
+    fs.writeFileSync(batchReportPath, batchReport);
+    
+    // Calculate aggregate metrics
+    let totalPages = 0;
+    let totalCorrectPages = 0;
+    let totalSOFPages = 0;
+    let totalCorrectSOFPages = 0;
+    let successfulDocs = 0;
+    
+    batchResults.forEach(doc => {
+      if (doc) {
+        successfulDocs++;
+        totalPages += doc.totalPages;
+        totalCorrectPages += doc.correctPages;
+        totalSOFPages += doc.totalSOFPages;
+        totalCorrectSOFPages += doc.correctSOFPages;
+      }
+    });
+    
+    const overallAccuracy = totalPages > 0 ? (totalCorrectPages / totalPages) * 100 : 0;
+    const sofAccuracy = totalSOFPages > 0 ? (totalCorrectSOFPages / totalSOFPages) * 100 : 0;
+    
+    // Print summary to console
+    console.log('\n📈 Batch Evaluation Results:');
+    console.log(`  - Documents Processed: ${successfulDocs}/${numDocs}`);
+    console.log(`  - Total Pages Processed: ${totalPages}`);
+    console.log(`  - Correctly Classified Pages: ${totalCorrectPages} (${overallAccuracy.toFixed(2)}%)`);
+    console.log(`  - SOF Pages Detected: ${totalSOFPages}`);
+    console.log(`  - Correctly Classified SOF Pages: ${totalCorrectSOFPages} (${sofAccuracy.toFixed(2)}%)`);
+    console.log(`  - Processing Time: ${processingTimeInMinutes} minutes`);
+    console.log(`\n📝 Batch report saved to: ${batchReportPath}`);
+    
+    return {
+      totalDocuments: numDocs,
+      successfulDocuments: successfulDocs,
+      totalPages,
+      totalCorrectPages,
+      totalSOFPages,
+      totalCorrectSOFPages,
+      overallAccuracy: overallAccuracy.toFixed(2),
+      sofAccuracy: sofAccuracy.toFixed(2),
+      processingTimeInMinutes,
+      batchReportPath
+    };
+  } catch (error) {
+    console.error('Error during batch evaluation:', error);
+    return null;
+  }
 }
 
 // Run if called directly
 if (require.main === module) {
-  const { documentIndex } = parseArgs();
-  
-  evaluateDocument(documentIndex)
+  runBatchEvaluation()
     .then(() => {
-      console.log('\n✅ Evaluation completed successfully');
+      console.log('\n✅ Batch evaluation completed successfully');
     })
     .catch(error => {
-      console.error('\n❌ Evaluation failed:', error);
+      console.error('\n❌ Batch evaluation failed:', error);
       process.exit(1);
     });
 }
 
-module.exports = { evaluateDocument }; 
+module.exports = { runBatchEvaluation, evaluateDocument }; 
