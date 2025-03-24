@@ -90,30 +90,67 @@ function findDocumentDirectory() {
 
 // Helper function to classify a page using Anthropic API
 async function classifyPageWithAnthropic(pageContent) {
-  const systemPrompt = `You are an expert maritime document analyst specialized in classifying pages from Statement of Facts (SOF) documents.
+  const systemPrompt = `You are an expert maritime document analyst specialized in classifying pages from Cargo Documents for Port Operations. Your task is to analyze a maritime document page and categorize it accurately into one of three categories: "AGENT_SOF", "MASTER_SOF", or "OTHER".
 
-Your task is to analyze a maritime document page and categorize it accurately.
+Here is the text of the document to analyze:
 
-Please classify the page into one of these categories:
-1. AGENT_SOF - Agent's Statement of Facts document
-2. MASTER_SOF - Master's (ship's) Statement of Facts document
-3. OTHER - Not a Statement of Facts document
+<document>
+${pageContent}
+</document>
 
-Only respond with one of: "AGENT_SOF", "MASTER_SOF", or "OTHER"`;
+Carefully examine the document text and determine which category it belongs to based on the following characteristics:
+
+1. "AGENT_SOF" (Agent's Statement of Facts):
+   - Often includes a local address on the document
+   - May contain languages other than English, reflecting the local language of the port agent's country
+   - Typically provided by the port agent
+
+2. "MASTER_SOF" (Master's Statement of Facts):
+   - Usually includes vessel details such as name and IMO number
+   - Often displays the name of the shipping company operating the ship
+   - Typically marked as FROM and SIGNED by the vessel's "Master"
+   - Primarily written in English, with foreign languages less common (except in company logos or branding)
+   - Often stamped with a stamp bearing the vessel's IMO Number and Vessel Name
+
+3. "OTHER" (Not a Statement of Facts document):
+   - Does not match the characteristics of either AGENT_SOF or MASTER_SOF
+   - May be an entirely different type of maritime document
+
+Universal characteristics of SOF documents (both AGENT_SOF and MASTER_SOF):
+- Labeled as "Statement of Facts" or "Time Sheet"
+- Uses a tabular format to record times and events
+- Records port operations in chronological sequence
+- Identifies a specific vessel name and voyage number
+- Specifies cargo being transported
+- Documents standard maritime procedures (arrival, berthing, cargo operations, departure)
+- Uses precise time notation for recording events
+- Includes spaces for signatures from vessel's Master and shore representatives
+- Often includes stamps and/or signatures for authentication
+- May include statements certifying the accuracy of the information
+
+Before providing your final classification, use the <scratchpad> tags to think through your analysis process. Consider the presence or absence of key characteristics for each category and how they apply to the given document.
+
+After your analysis, provide your final classification as a single word response: "AGENT_SOF", "MASTER_SOF", or "OTHER". Do not include any additional explanation or justification in your final answer.
+
+<scratchpad>
+[Your thought process here]
+</scratchpad>
+
+Final classification:`;
 
   try {
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-3-sonnet-20240229',
-        system: systemPrompt,
+        model: 'claude-3-7-sonnet-20250219',
+        system: '',
         messages: [
           {
             role: 'user',
-            content: `Please classify the following document page:\n\n${pageContent}`
+            content: systemPrompt
           }
         ],
-        max_tokens: 50
+        max_tokens: 500
       },
       {
         headers: {
@@ -124,25 +161,82 @@ Only respond with one of: "AGENT_SOF", "MASTER_SOF", or "OTHER"`;
       }
     );
     
-    // Extract classification from response - get only the first word which should be the classification
+    // Extract the full response text
     const fullResponseText = response.data.content[0].text.trim();
     
-    // Extract just AGENT_SOF, MASTER_SOF, or OTHER from the response
-    const classificationMatch = fullResponseText.match(/^(AGENT_SOF|MASTER_SOF|OTHER)/i);
-    
-    if (classificationMatch) {
-      // Return just the matched classification
-      return classificationMatch[0];
-    } else {
-      // If no match found, return the first word (best effort)
-      return fullResponseText.split(/\s+/)[0];
+    // Extract the reasoning (scratchpad content)
+    let reasoning = '';
+    const scratchpadMatch = fullResponseText.match(/<scratchpad>([\s\S]*?)<\/scratchpad>/i);
+    if (scratchpadMatch && scratchpadMatch[1]) {
+      reasoning = scratchpadMatch[1].trim();
     }
+    
+    // Extract the final classification (after "Final classification:")
+    let classification = '';
+    const classificationMatch = fullResponseText.match(/Final classification:\s*(\S+)/i);
+    if (classificationMatch && classificationMatch[1]) {
+      classification = classificationMatch[1].trim();
+    } else {
+      // Check if there's text after "scratchpad" closing tag
+      const afterScratchpad = fullResponseText.split(/<\/scratchpad>/i)[1];
+      if (afterScratchpad) {
+        // Try to find classification in text after scratchpad
+        const typeMatchAfterScratchpad = afterScratchpad.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
+        if (typeMatchAfterScratchpad) {
+          classification = typeMatchAfterScratchpad[0];
+        }
+      }
+      
+      // If still not found, check the last sentence of the scratchpad for a conclusion
+      if (!classification) {
+        const scratchpadContent = scratchpadMatch && scratchpadMatch[1] ? scratchpadMatch[1] : '';
+        const sentences = scratchpadContent.split(/\.\s+/);
+        const lastSentence = sentences[sentences.length - 1];
+        
+        // Check if last sentence contains a clear conclusion
+        if (lastSentence && lastSentence.match(/should be classified as|would be classified as|classification would be|classify as|category is/i)) {
+          const typeMatchInConclusion = lastSentence.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
+          if (typeMatchInConclusion) {
+            classification = typeMatchInConclusion[0];
+          }
+        }
+      }
+      
+      // Last resort: if the text contains any of these terms, prefer OTHER over AGENT_SOF
+      if (!classification) {
+        if (fullResponseText.match(/not an? (AGENT_SOF|agent sof|agent's sof)/i) || 
+            fullResponseText.match(/not a statement of facts/i) ||
+            fullResponseText.match(/falls into the "OTHER" category/i) ||
+            fullResponseText.match(/falls under the "OTHER" category/i) ||
+            fullResponseText.match(/classified as "OTHER"/i)) {
+          classification = 'OTHER';
+        } else {
+          // Original fallback
+          const typeMatch = fullResponseText.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
+          if (typeMatch) {
+            classification = typeMatch[0];
+          } else {
+            // Last resort: get the last word of the response
+            const words = fullResponseText.split(/\s+/);
+            classification = words[words.length - 1];
+          }
+        }
+      }
+    }
+    
+    return {
+      classification: classification.toUpperCase(),
+      reasoning
+    };
   } catch (error) {
     console.error('Error classifying page with Anthropic:', error.message);
     if (error.response) {
       console.error('API response:', error.response.data);
     }
-    return 'ERROR';
+    return {
+      classification: 'ERROR',
+      reasoning: 'API error occurred'
+    };
   }
 }
 
@@ -318,7 +412,8 @@ async function evaluateDocument(documentIndex) {
       
       // Get actual classification
       console.log(`  - Classifying page ${pageNumber}...`);
-      const actualClassification = await classifyPageWithAnthropic(pageContent);
+      const classificationResult = await classifyPageWithAnthropic(pageContent);
+      const actualClassification = classificationResult.classification;
       
       // Check if classification is correct - normalize strings for comparison
       const normalizedActual = actualClassification.trim().toUpperCase();
@@ -335,6 +430,7 @@ async function evaluateDocument(documentIndex) {
         pageNumber,
         expectedClassification,
         actualClassification,
+        reasoning: classificationResult.reasoning,
         isCorrect,
         category: expectedPageData.category,
         subcategory: expectedPageData.subcategory
@@ -342,6 +438,11 @@ async function evaluateDocument(documentIndex) {
       
       // Log individual result
       console.log(`    ${isCorrect ? '✅' : '❌'} Expected: ${expectedClassification}, Got: ${actualClassification}`);
+      
+      // Add a condensed version of the reasoning, if available
+      if (classificationResult.reasoning) {
+        console.log(`    📝 Reasoning: ${classificationResult.reasoning}`);
+      }
     }
     
     // Calculate accuracy metrics
@@ -375,6 +476,22 @@ async function evaluateDocument(documentIndex) {
     const markdownReport = generateMarkdownReport(summary);
     const markdownPath = path.join(resultsOutputFolder, resultFilename.replace('.json', '.md'));
     fs.writeFileSync(markdownPath, markdownReport);
+    
+    // Generate results table
+    console.log('\n📊 Results Table:');
+    console.log('| Page | Expected | Actual | Correct |');
+    console.log('|------|----------|--------|---------|');
+    results.forEach(r => {
+      console.log(`| ${r.pageNumber.toString().padEnd(4)} | ${r.expectedClassification.padEnd(8)} | ${r.actualClassification.padEnd(6)} | ${r.isCorrect ? '✅' : '❌'} |`);
+    });
+    
+    // Generate detailed results table with reasoning
+    console.log('\n📑 Detailed Results:');
+    console.log('| Page | Expected | Actual | Correct | Reasoning |');
+    console.log('|------|----------|--------|---------|-----------|');
+    results.forEach(r => {
+      console.log(`| ${r.pageNumber.toString().padEnd(4)} | ${r.expectedClassification.padEnd(8)} | ${r.actualClassification.padEnd(6)} | ${r.isCorrect ? '✅' : '❌'} | ${r.reasoning || 'N/A'} |`);
+    });
     
     // Output summary to console
     console.log('\n📊 Evaluation Results:');
@@ -410,9 +527,9 @@ function generateMarkdownReport(summary) {
 
 ## Detailed Results
 
-| Page # | Category | Subcategory | Expected | Actual | Result |
-|--------|----------|-------------|----------|--------|--------|
-${summary.results.map(r => `| ${r.pageNumber} | ${r.category} | ${r.subcategory} | ${r.expectedClassification} | ${r.actualClassification} | ${r.isCorrect ? '✅' : '❌'} |`).join('\n')}
+| Page # | Category | Subcategory | Expected | Actual | Result | Reasoning |
+|--------|----------|-------------|----------|--------|--------|-----------|
+${summary.results.map(r => `| ${r.pageNumber} | ${r.category} | ${r.subcategory} | ${r.expectedClassification} | ${r.actualClassification} | ${r.isCorrect ? '✅' : '❌'} | ${r.reasoning || 'N/A'} |`).join('\n')}
 
 ## Conclusion
 The model successfully classified ${summary.correctPages} out of ${summary.totalPages} pages correctly, giving an overall accuracy of ${summary.overallAccuracy}%.

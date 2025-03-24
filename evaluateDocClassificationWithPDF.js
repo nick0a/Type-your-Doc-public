@@ -1,5 +1,5 @@
-// evaluateDocClassificationBatch.js (v2.0)
-// Purpose: Evaluate document classification against validated dataset for multiple documents
+// evaluateDocClassificationWithPDF.js (v3.0)
+// Purpose: Evaluate document classification using both OCR text AND direct PDF input
 
 require('dotenv').config();
 const fs = require('fs');
@@ -104,17 +104,34 @@ function findDocumentDirectory() {
   process.exit(1);
 }
 
-// Helper function to classify a page using Anthropic API
-async function classifyPageWithAnthropic(pageContent) {
-  const systemPrompt = `You are an expert maritime document analyst specialized in classifying pages from Cargo Documents for Port Operations. Your task is to analyze a maritime document page and categorize it accurately into one of three categories: "AGENT_SOF", "MASTER_SOF", or "OTHER".
+// Helper function to classify a page using extracted text AND PDF
+async function classifyPageWithPDFAndText(pdfPath, pageContent, pageNumber) {
+  // Read the PDF file and convert to base64
+  const pdfData = fs.readFileSync(pdfPath);
+  const pdfBase64 = pdfData.toString('base64');
+  
+  // Create a message structure with both text and PDF
+  const messages = [
+    {
+      role: 'user',
+      content: [
+        {
+          type: 'document',
+          source: {
+            type: 'base64',
+            media_type: 'application/pdf',
+            data: pdfBase64
+          }
+        },
+        {
+          type: 'text',
+          text: `You are an expert maritime document analyst specialized in classifying pages from Cargo Documents for Port Operations. Your task is to analyze a maritime document page and categorize it accurately into one of three categories: "AGENT_SOF", "MASTER_SOF", or "OTHER".
 
-Here is the text of the document to analyze:
+I am providing you with:
+1. The OCR-extracted text of the document (which may be incomplete)
+2. The actual PDF document itself.
 
-<document>
-${pageContent}
-</document>
-
-Carefully examine the document text and determine which category it belongs to based on the following characteristics:
+Carefully examine both the document text and PDF to determine which category each page belongs to based on the following characteristics:
 
 1. "AGENT_SOF" (Agent's Statement of Facts):
    - Often includes a local address on the document
@@ -144,31 +161,25 @@ Universal characteristics of SOF documents (both AGENT_SOF and MASTER_SOF):
 - Often includes stamps and/or signatures for authentication
 - May include statements certifying the accuracy of the information
 
-Before providing your final classification, use the <scratchpad> tags to think through your analysis process. Consider the presence or absence of key characteristics for each category and how they apply to the given document.
+Here is the OCR-extracted text for the document:
 
-After your analysis, provide your final classification as a single word response: "AGENT_SOF", "MASTER_SOF", or "OTHER". As part of your final response, include a short explanation of your reasoning for the classification extracted from scratchpad thinking you applied to the document. 
+<ocr_text>
+${pageContent}
+</ocr_text>
+
+Before providing your final classification, use the <scratchpad> tags to think through your analysis process. Consider the presence or absence of key characteristics for each category and how they apply to the given document page.
+
+After your analysis, provide your final classification as a single word response: "AGENT_SOF", "MASTER_SOF", or "OTHER".
 
 <scratchpad>
 [Your thought process here]
 </scratchpad>
 
-Final classification:`;
-  
-  
-  
-  
-  // `You are an expert maritime document analyst specialized in classifying pages from Statement of Facts (SOF) documents.
-
-// Your task is to analyze a maritime document page and categorize it accurately.
-
-// Please classify the page into one of these categories:
-// 1. "AGENT_SOF" - Agent's Statement of Facts document
-// - The agent SOF is provided by the port agent and will often have a local address on the document.  Often it may have other languages apart from English denoting the local language of the country where the port agent is based.  
-// 2. "MASTER_SOF" - Master's (ship's) Statement of Facts document
-// - The Masters SOF is provided by the ship and will often have the vessel details sauch as name and IMO number on the document as well as the name of the shipping company that operates the ship.  It will often be FROM and SIGNED by the "Master" of the vessel.  It will be written in English and is less likely to have foreign languages on it, execept where they form part of the company logo or branding.  One tell tale sign for Masters Cargo Docs is they will usually be stamped with a stamp bearing the vessels IMO Number and Vessel Name.
-// 3. "OTHER" - Not a Statement of Facts document
-
-// Only respond with one of: "AGENT_SOF", "MASTER_SOF", or "OTHER"`;
+Final classification:`
+        }
+      ]
+    }
+  ];
 
   try {
     const response = await axios.post(
@@ -176,13 +187,8 @@ Final classification:`;
       {
         model: 'claude-3-7-sonnet-20250219',
         system: '',
-        messages: [
-          {
-            role: 'user',
-            content: systemPrompt
-          }
-        ],
-        max_tokens: 500
+        messages: messages,
+        max_tokens: 1024
       },
       {
         headers: {
@@ -209,14 +215,50 @@ Final classification:`;
     if (classificationMatch && classificationMatch[1]) {
       classification = classificationMatch[1].trim();
     } else {
-      // Fallback: look for just the classification terms
-      const typeMatch = fullResponseText.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
-      if (typeMatch) {
-        classification = typeMatch[0];
-      } else {
-        // Last resort: get the last word of the response
-        const words = fullResponseText.split(/\s+/);
-        classification = words[words.length - 1];
+      // Check if there's text after "scratchpad" closing tag
+      const afterScratchpad = fullResponseText.split(/<\/scratchpad>/i)[1];
+      if (afterScratchpad) {
+        // Try to find classification in text after scratchpad
+        const typeMatchAfterScratchpad = afterScratchpad.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
+        if (typeMatchAfterScratchpad) {
+          classification = typeMatchAfterScratchpad[0];
+        }
+      }
+      
+      // If still not found, check the last sentence of the scratchpad for a conclusion
+      if (!classification) {
+        const scratchpadContent = scratchpadMatch && scratchpadMatch[1] ? scratchpadMatch[1] : '';
+        const sentences = scratchpadContent.split(/\.\s+/);
+        const lastSentence = sentences[sentences.length - 1];
+        
+        // Check if last sentence contains a clear conclusion
+        if (lastSentence && lastSentence.match(/should be classified as|would be classified as|classification would be|classify as|category is/i)) {
+          const typeMatchInConclusion = lastSentence.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
+          if (typeMatchInConclusion) {
+            classification = typeMatchInConclusion[0];
+          }
+        }
+      }
+      
+      // Last resort: if the text contains any of these terms, prefer OTHER over AGENT_SOF
+      if (!classification) {
+        if (fullResponseText.match(/not an? (AGENT_SOF|agent sof|agent's sof)/i) || 
+            fullResponseText.match(/not a statement of facts/i) ||
+            fullResponseText.match(/falls into the "OTHER" category/i) ||
+            fullResponseText.match(/falls under the "OTHER" category/i) ||
+            fullResponseText.match(/classified as "OTHER"/i)) {
+          classification = 'OTHER';
+        } else {
+          // Original fallback
+          const typeMatch = fullResponseText.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
+          if (typeMatch) {
+            classification = typeMatch[0];
+          } else {
+            // Last resort: get the last word of the response
+            const words = fullResponseText.split(/\s+/);
+            classification = words[words.length - 1];
+          }
+        }
       }
     }
     
@@ -339,7 +381,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     const ocrResponse = JSON.parse(fs.readFileSync(ocrResponsePath, 'utf8'));
     
     // Classify each page and evaluate accuracy
-    console.log('🧠 Classifying pages with Anthropic API...');
+    console.log('🧠 Classifying pages with Anthropic API (using PDF+Text)...');
     
     const results = [];
     let totalPages = 0;
@@ -376,9 +418,9 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
         totalSOFPages++;
       }
       
-      // Get actual classification
-      console.log(`  - Classifying page ${pageNumber}...`);
-      const classificationResult = await classifyPageWithAnthropic(pageContent);
+      // Get actual classification using both PDF and extracted text
+      console.log(`  - Classifying page ${pageNumber} using PDF + OCR text...`);
+      const classificationResult = await classifyPageWithPDFAndText(documentPath, pageContent, pageNumber);
       const actualClassification = classificationResult.classification;
       
       // Check if classification is correct - normalize strings for comparison
@@ -405,7 +447,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
       // Log individual result
       console.log(`    ${isCorrect ? '✅' : '❌'} Expected: ${expectedClassification}, Got: ${actualClassification}`);
       
-      // Add a condensed version of the reasoning, if available
+      // Add the reasoning
       if (classificationResult.reasoning) {
         console.log(`    📝 Reasoning: ${classificationResult.reasoning}`);
       }
@@ -433,7 +475,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     fs.mkdirSync(resultsOutputFolder, { recursive: true });
     
     const resultTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const resultFilename = `${resultTimestamp}_evaluation_${path.basename(documentPath).replace(/[^a-zA-Z0-9]/g, '_')}.json`;
+    const resultFilename = `${resultTimestamp}_evaluation_pdf_${path.basename(documentPath).replace(/[^a-zA-Z0-9]/g, '_')}.json`;
     const resultPath = path.join(resultsOutputFolder, resultFilename);
     
     fs.writeFileSync(resultPath, JSON.stringify(summary, null, 2));
@@ -444,7 +486,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     fs.writeFileSync(markdownPath, markdownReport);
     
     // Output summary to console
-    console.log('\n📊 Document Evaluation Results:');
+    console.log('\n📊 Document Evaluation Results (PDF + OCR):');
     console.log(`  - Document: ${documentFilename}`);
     console.log(`  - File: ${path.basename(documentPath)}`);
     console.log(`  - Pages Processed: ${totalPages}`);
@@ -470,13 +512,14 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
 
 // Generate markdown report for a single document
 function generateMarkdownReport(summary) {
-  const report = `# Document Classification Evaluation Report
+  const report = `# Document Classification Evaluation Report (PDF + OCR Text)
 
 ## Document Information
 - **Dataset Filename:** ${summary.document}
 - **Actual File:** ${path.basename(summary.documentPath)}
 - **Total Pages:** ${summary.totalPages}
 - **Evaluation Date:** ${new Date().toISOString().split('T')[0]}
+- **Method:** PDF Direct + OCR Text
 
 ## Summary Results
 - **Overall Accuracy:** ${summary.correctPages}/${summary.totalPages} (${summary.overallAccuracy}% success rate)
@@ -517,13 +560,14 @@ function generateBatchReport(results, timestamp) {
   const overallAccuracy = totalPages > 0 ? (totalCorrectPages / totalPages) * 100 : 0;
   const sofAccuracy = totalSOFPages > 0 ? (totalCorrectSOFPages / totalSOFPages) * 100 : 0;
   
-  const report = `# Batch Document Classification Evaluation Report
+  const report = `# Batch Document Classification Evaluation Report (PDF + OCR Text)
 
 ## Overview
 - **Total Documents Processed:** ${results.filter(r => r !== null).length}
 - **Total Documents Failed:** ${results.filter(r => r === null).length}
 - **Total Pages Processed:** ${totalPages}
 - **Evaluation Date:** ${new Date().toISOString().split('T')[0]}
+- **Method:** PDF Direct + OCR Text
 
 ## Summary Results
 - **Overall Accuracy:** ${totalCorrectPages}/${totalPages} (${overallAccuracy.toFixed(2)}% success rate)
@@ -566,7 +610,7 @@ async function runBatchEvaluation() {
     console.log(`\nAvailable document range: 1-${validDocuments.length}`);
     
     // Get number of documents to evaluate
-    const numDocsInput = await getUserInput(`\nHow many documents would you like to evaluate? (1-${validDocuments.length}): `);
+    const numDocsInput = await getUserInput(`\nHow many documents would you like to evaluate with PDF+OCR? (1-${validDocuments.length}): `);
     const numDocs = parseInt(numDocsInput);
     
     if (isNaN(numDocs) || numDocs < 1 || numDocs > validDocuments.length) {
@@ -574,7 +618,7 @@ async function runBatchEvaluation() {
       process.exit(1);
     }
     
-    console.log(`\n🚀 Starting batch evaluation of ${numDocs} documents...`);
+    console.log(`\n🚀 Starting batch evaluation with PDF+OCR for ${numDocs} documents...`);
     
     // Randomly select documents
     const selectedDocuments = [];
@@ -607,7 +651,7 @@ async function runBatchEvaluation() {
     console.log('\n📊 Generating batch evaluation report...');
     const batchReport = generateBatchReport(batchResults, timestamp);
     const resultsOutputFolder = path.join(__dirname, 'results');
-    const batchReportPath = path.join(resultsOutputFolder, `${timestamp}_batch_evaluation_report.md`);
+    const batchReportPath = path.join(resultsOutputFolder, `${timestamp}_batch_evaluation_pdf_report.md`);
     fs.writeFileSync(batchReportPath, batchReport);
     
     // Calculate aggregate metrics
@@ -631,7 +675,7 @@ async function runBatchEvaluation() {
     const sofAccuracy = totalSOFPages > 0 ? (totalCorrectSOFPages / totalSOFPages) * 100 : 0;
     
     // Print summary to console
-    console.log('\n📈 Batch Evaluation Results:');
+    console.log('\n📈 Batch Evaluation Results (PDF + OCR):');
     console.log(`  - Documents Processed: ${successfulDocs}/${numDocs}`);
     console.log(`  - Total Pages Processed: ${totalPages}`);
     console.log(`  - Correctly Classified Pages: ${totalCorrectPages} (${overallAccuracy.toFixed(2)}%)`);
@@ -662,7 +706,7 @@ async function runBatchEvaluation() {
 if (require.main === module) {
   runBatchEvaluation()
     .then(() => {
-      console.log('\n✅ Batch evaluation completed successfully');
+      console.log('\n✅ Batch evaluation with PDF + OCR completed successfully');
     })
     .catch(error => {
       console.error('\n❌ Batch evaluation failed:', error);

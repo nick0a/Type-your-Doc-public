@@ -1,5 +1,5 @@
-// evaluateDocClassificationBatch.js (v2.0)
-// Purpose: Evaluate document classification against validated dataset for multiple documents
+// batchClassifyDocWithPDF.js
+// Purpose: Evaluate document classification using single API calls for entire documents
 
 require('dotenv').config();
 const fs = require('fs');
@@ -104,17 +104,20 @@ function findDocumentDirectory() {
   process.exit(1);
 }
 
-// Helper function to classify a page using Anthropic API
-async function classifyPageWithAnthropic(pageContent) {
-  const systemPrompt = `You are an expert maritime document analyst specialized in classifying pages from Cargo Documents for Port Operations. Your task is to analyze a maritime document page and categorize it accurately into one of three categories: "AGENT_SOF", "MASTER_SOF", or "OTHER".
+// Helper function to classify all pages in a single API call
+async function classifyAllPagesWithPDF(pdfPath, pagesContent) {
+  // Read the PDF file and convert to base64
+  const pdfData = fs.readFileSync(pdfPath);
+  const pdfBase64 = pdfData.toString('base64');
+  
+  // Construct the prompt with all pages
+  let promptText = `You are an expert maritime document analyst specialized in classifying pages from Cargo Documents for Port Operations. Your task is to analyze multiple pages from a maritime document and categorize each page accurately into one of three categories: "AGENT_SOF", "MASTER_SOF", or "OTHER".
 
-Here is the text of the document to analyze:
+I am providing you with:
+1. The OCR-extracted text for each page (which may be incomplete)
+2. The actual PDF document itself.
 
-<document>
-${pageContent}
-</document>
-
-Carefully examine the document text and determine which category it belongs to based on the following characteristics:
+For EACH page, carefully examine both the document text and PDF to determine which category that specific page belongs to based on the following characteristics:
 
 1. "AGENT_SOF" (Agent's Statement of Facts):
    - Often includes a local address on the document
@@ -127,10 +130,22 @@ Carefully examine the document text and determine which category it belongs to b
    - Typically marked as FROM and SIGNED by the vessel's "Master"
    - Primarily written in English, with foreign languages less common (except in company logos or branding)
    - Often stamped with a stamp bearing the vessel's IMO Number and Vessel Name
+   -
 
 3. "OTHER" (Not a Statement of Facts document):
    - Does not match the characteristics of either AGENT_SOF or MASTER_SOF
    - May be an entirely different type of maritime document
+      - IMPORTANT: This category INCLUDES Surveyor Statements of Facts, which are a distinct type of SOF
+
+4. "SURVEYOR SOF" (Surveyor's Statement of Facts) - CATEGORIZE THESE AS "OTHER":
+   - Created by independent surveying companies (e.g., Saybolt, SGS, Intertek, Bureau Veritas)
+   - Contains surveyor company letterhead, logo, or explicit mention of the surveyor company
+   - While labeled as "Statement of Facts," they are created by third-party inspectors/surveyors
+   - Often focuses primarily on cargo details, specifications, and loading operations
+   - Contains signature fields for multiple parties (vessel representative, installation, surveyor)
+   - May mention "Independent Surveyor" or similar terminology
+   - Often has a report/reference number from the surveying company
+   - Primarily documents cargo operations rather than the full chronology of port events
 
 Universal characteristics of SOF documents (both AGENT_SOF and MASTER_SOF):
 - Labeled as "Statement of Facts" or "Time Sheet"
@@ -144,45 +159,55 @@ Universal characteristics of SOF documents (both AGENT_SOF and MASTER_SOF):
 - Often includes stamps and/or signatures for authentication
 - May include statements certifying the accuracy of the information
 
-Before providing your final classification, use the <scratchpad> tags to think through your analysis process. Consider the presence or absence of key characteristics for each category and how they apply to the given document.
+Below are the OCR-extracted texts for each page. For each page, provide your classification.
 
-After your analysis, provide your final classification as a single word response: "AGENT_SOF", "MASTER_SOF", or "OTHER". As part of your final response, include a short explanation of your reasoning for the classification extracted from scratchpad thinking you applied to the document. 
+`;
 
-<scratchpad>
-[Your thought process here]
-</scratchpad>
+  // Add each page's content to the prompt
+  pagesContent.forEach((content, index) => {
+    promptText += `\n----- PAGE ${index + 1} -----\n`;
+    promptText += `<ocr_text>\n${content}\n</ocr_text>\n`;
+  });
 
-Final classification:`;
-  
-  
-  
-  
-  // `You are an expert maritime document analyst specialized in classifying pages from Statement of Facts (SOF) documents.
+  promptText += `\nFor each page, provide a classification of AGENT_SOF, MASTER_SOF, or OTHER.
+Use the following format for your response:
+PAGE 1: [Scratchpad Reasoning] - [CLASSIFICATION]
+PAGE 2: [Scratchpad Reasoning] - [CLASSIFICATION]
+...and so on for all pages.
 
-// Your task is to analyze a maritime document page and categorize it accurately.
-
-// Please classify the page into one of these categories:
-// 1. "AGENT_SOF" - Agent's Statement of Facts document
-// - The agent SOF is provided by the port agent and will often have a local address on the document.  Often it may have other languages apart from English denoting the local language of the country where the port agent is based.  
-// 2. "MASTER_SOF" - Master's (ship's) Statement of Facts document
-// - The Masters SOF is provided by the ship and will often have the vessel details sauch as name and IMO number on the document as well as the name of the shipping company that operates the ship.  It will often be FROM and SIGNED by the "Master" of the vessel.  It will be written in English and is less likely to have foreign languages on it, execept where they form part of the company logo or branding.  One tell tale sign for Masters Cargo Docs is they will usually be stamped with a stamp bearing the vessels IMO Number and Vessel Name.
-// 3. "OTHER" - Not a Statement of Facts document
-
-// Only respond with one of: "AGENT_SOF", "MASTER_SOF", or "OTHER"`;
+Examine each page individually and make your decision based on the characteristics described above. Take your time to analyze each page thoroughly before providing your classification.  The [Reasoning] component should include a short explanation of your reasoning for the classification extracted from scratchpad thinking you applied to the document.`;
 
   try {
+    console.log(`Making a single API call to classify all ${pagesContent.length} pages...`);
+    
+    // Create a message structure with both text and PDF
+    const messages = [
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: pdfBase64
+            }
+          },
+          {
+            type: 'text',
+            text: promptText
+          }
+        ]
+      }
+    ];
+
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: 'claude-3-7-sonnet-20250219',
         system: '',
-        messages: [
-          {
-            role: 'user',
-            content: systemPrompt
-          }
-        ],
-        max_tokens: 500
+        messages: messages,
+        max_tokens: 4000 // Increased for longer responses with multiple pages
       },
       {
         headers: {
@@ -196,43 +221,68 @@ Final classification:`;
     // Extract the full response text
     const fullResponseText = response.data.content[0].text.trim();
     
-    // Extract the reasoning (scratchpad content)
-    let reasoning = '';
-    const scratchpadMatch = fullResponseText.match(/<scratchpad>([\s\S]*?)<\/scratchpad>/i);
-    if (scratchpadMatch && scratchpadMatch[1]) {
-      reasoning = scratchpadMatch[1].trim();
+    // Parse the response to extract classifications for each page
+    const pageClassifications = [];
+    
+    // Updated regex to capture reasoning first, then classification after the last dash
+    // This matches "PAGE X: [any reasoning text] - [CLASSIFICATION]" format
+    const pageRegex = /PAGE\s+(\d+)\s*:\s*(.*?)\s*-\s*(AGENT_SOF|MASTER_SOF|OTHER)\s*$/gmi;
+    
+    let match;
+    while ((match = pageRegex.exec(fullResponseText)) !== null) {
+      const pageNumber = parseInt(match[1]);
+      const reasoning = match[2] ? match[2].trim() : '';
+      const classification = match[3].toUpperCase();
+      
+      pageClassifications.push({
+        pageNumber,
+        classification,
+        reasoning
+      });
     }
     
-    // Extract the final classification (after "Final classification:")
-    let classification = '';
-    const classificationMatch = fullResponseText.match(/Final classification:\s*(\S+)/i);
-    if (classificationMatch && classificationMatch[1]) {
-      classification = classificationMatch[1].trim();
-    } else {
-      // Fallback: look for just the classification terms
-      const typeMatch = fullResponseText.match(/(AGENT_SOF|MASTER_SOF|OTHER)/i);
-      if (typeMatch) {
-        classification = typeMatch[0];
-      } else {
-        // Last resort: get the last word of the response
-        const words = fullResponseText.split(/\s+/);
-        classification = words[words.length - 1];
+    // Sort results by page number
+    pageClassifications.sort((a, b) => a.pageNumber - b.pageNumber);
+    
+    // Check if we have all pages classified
+    if (pageClassifications.length < pagesContent.length) {
+      console.warn(`Warning: Only found classifications for ${pageClassifications.length} pages out of ${pagesContent.length}`);
+      
+      // Fill in missing pages by scanning the response more broadly
+      for (let i = 1; i <= pagesContent.length; i++) {
+        if (!pageClassifications.some(p => p.pageNumber === i)) {
+          // Try to find mentions of this page elsewhere in the response
+          const altPageRegex = new RegExp(`page\\s*${i}\\s*[:\\-]?\\s*(.*?)\\s*-\\s*(agent_sof|master_sof|other)`, 'i');
+          const altMatch = fullResponseText.match(altPageRegex);
+          
+          if (altMatch) {
+            pageClassifications.push({
+              pageNumber: i,
+              classification: altMatch[2].toUpperCase(),
+              reasoning: altMatch[1] ? altMatch[1].trim() : 'Extracted from general text'
+            });
+          } else {
+            // Last resort: add a placeholder
+            pageClassifications.push({
+              pageNumber: i,
+              classification: 'UNKNOWN',
+              reasoning: 'Classification not found in response'
+            });
+          }
+        }
       }
+      
+      // Resort after adding missing pages
+      pageClassifications.sort((a, b) => a.pageNumber - b.pageNumber);
     }
     
-    return {
-      classification: classification.toUpperCase(),
-      reasoning
-    };
+    return pageClassifications;
   } catch (error) {
-    console.error('Error classifying page with Anthropic:', error.message);
+    console.error('Error classifying pages with Anthropic:', error.message);
     if (error.response) {
       console.error('API response:', error.response.data);
     }
-    return {
-      classification: 'ERROR',
-      reasoning: 'API error occurred'
-    };
+    return null;
   }
 }
 
@@ -325,7 +375,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     console.log(`Found matching document: ${path.basename(documentPath)}`);
     const expectedPages = validationDataset[documentFilename];
     
-    // Process document with Mistral OCR
+    // Process document with Mistral OCR - SINGLE API CALL
     console.log('🤖 Processing document with Mistral OCR...');
     const ocrResult = await processDocument(documentPath);
     
@@ -338,18 +388,27 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     const ocrResponsePath = path.join(ocrResult.outputFolder, 'full_response.json');
     const ocrResponse = JSON.parse(fs.readFileSync(ocrResponsePath, 'utf8'));
     
-    // Classify each page and evaluate accuracy
-    console.log('🧠 Classifying pages with Anthropic API...');
+    // Prepare array of page contents
+    const pagesContent = ocrResponse.pages.map(page => page.markdown || '');
     
+    // Classify all pages in a SINGLE API CALL
+    console.log('🧠 Classifying all pages with Anthropic API (using PDF+Text) in a single call...');
+    const allPageClassifications = await classifyAllPagesWithPDF(documentPath, pagesContent);
+    
+    if (!allPageClassifications) {
+      console.error('❌ Error classifying pages');
+      return null;
+    }
+    
+    // Process results
     const results = [];
     let totalPages = 0;
     let correctPages = 0;
     let totalSOFPages = 0;
     let correctSOFPages = 0;
     
-    for (let i = 0; i < ocrResponse.pages.length; i++) {
+    for (let i = 0; i < pagesContent.length; i++) {
       const pageNumber = i + 1; // Convert to 1-indexed
-      const pageContent = ocrResponse.pages[i].markdown || '';
       
       // Find expected classification
       const expectedPageData = expectedPages.find(p => p.pageNumber === pageNumber);
@@ -376,15 +435,21 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
         totalSOFPages++;
       }
       
-      // Get actual classification
-      console.log(`  - Classifying page ${pageNumber}...`);
-      const classificationResult = await classifyPageWithAnthropic(pageContent);
-      const actualClassification = classificationResult.classification;
+      // Find this page's classification from the batch results
+      const pageClassification = allPageClassifications.find(p => p.pageNumber === pageNumber);
+      let actualClassification = 'UNKNOWN';
+      let reasoning = 'Not processed';
+      
+      if (pageClassification) {
+        actualClassification = pageClassification.classification;
+        reasoning = pageClassification.reasoning || '';
+      }
       
       // Check if classification is correct - normalize strings for comparison
       const normalizedActual = actualClassification.trim().toUpperCase();
       const normalizedExpected = expectedClassification.trim().toUpperCase();
       const isCorrect = normalizedActual === normalizedExpected;
+      
       if (isCorrect) {
         correctPages++;
         if (expectedClassification !== 'OTHER') {
@@ -396,18 +461,18 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
         pageNumber,
         expectedClassification,
         actualClassification,
-        reasoning: classificationResult.reasoning,
+        reasoning,
         isCorrect,
         category: expectedPageData.category,
         subcategory: expectedPageData.subcategory
       });
       
       // Log individual result
-      console.log(`    ${isCorrect ? '✅' : '❌'} Expected: ${expectedClassification}, Got: ${actualClassification}`);
+      console.log(`    ${isCorrect ? '✅' : '❌'} Page ${pageNumber} - Expected: ${expectedClassification}, Got: ${actualClassification}`);
       
-      // Add a condensed version of the reasoning, if available
-      if (classificationResult.reasoning) {
-        console.log(`    📝 Reasoning: ${classificationResult.reasoning}`);
+      // Add the reasoning
+      if (reasoning) {
+        console.log(`    📝 Reasoning: ${reasoning}`);
       }
     }
     
@@ -433,7 +498,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     fs.mkdirSync(resultsOutputFolder, { recursive: true });
     
     const resultTimestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const resultFilename = `${resultTimestamp}_evaluation_${path.basename(documentPath).replace(/[^a-zA-Z0-9]/g, '_')}.json`;
+    const resultFilename = `${resultTimestamp}_batch_evaluation_pdf_${path.basename(documentPath).replace(/[^a-zA-Z0-9]/g, '_')}.json`;
     const resultPath = path.join(resultsOutputFolder, resultFilename);
     
     fs.writeFileSync(resultPath, JSON.stringify(summary, null, 2));
@@ -444,7 +509,7 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
     fs.writeFileSync(markdownPath, markdownReport);
     
     // Output summary to console
-    console.log('\n📊 Document Evaluation Results:');
+    console.log('\n📊 Document Evaluation Results (Batch PDF + OCR):');
     console.log(`  - Document: ${documentFilename}`);
     console.log(`  - File: ${path.basename(documentPath)}`);
     console.log(`  - Pages Processed: ${totalPages}`);
@@ -470,13 +535,14 @@ async function evaluateDocument(documentFilename, documentDir, validationDataset
 
 // Generate markdown report for a single document
 function generateMarkdownReport(summary) {
-  const report = `# Document Classification Evaluation Report
+  const report = `# Document Classification Evaluation Report (Batch PDF + OCR Text)
 
 ## Document Information
 - **Dataset Filename:** ${summary.document}
 - **Actual File:** ${path.basename(summary.documentPath)}
 - **Total Pages:** ${summary.totalPages}
 - **Evaluation Date:** ${new Date().toISOString().split('T')[0]}
+- **Method:** Batch PDF Direct + OCR Text (Single API Call)
 
 ## Summary Results
 - **Overall Accuracy:** ${summary.correctPages}/${summary.totalPages} (${summary.overallAccuracy}% success rate)
@@ -517,13 +583,14 @@ function generateBatchReport(results, timestamp) {
   const overallAccuracy = totalPages > 0 ? (totalCorrectPages / totalPages) * 100 : 0;
   const sofAccuracy = totalSOFPages > 0 ? (totalCorrectSOFPages / totalSOFPages) * 100 : 0;
   
-  const report = `# Batch Document Classification Evaluation Report
+  const report = `# Batch Document Classification Evaluation Report (PDF + OCR Text)
 
 ## Overview
 - **Total Documents Processed:** ${results.filter(r => r !== null).length}
 - **Total Documents Failed:** ${results.filter(r => r === null).length}
 - **Total Pages Processed:** ${totalPages}
 - **Evaluation Date:** ${new Date().toISOString().split('T')[0]}
+- **Method:** Batch PDF Direct + OCR Text (Single API Call per Document)
 
 ## Summary Results
 - **Overall Accuracy:** ${totalCorrectPages}/${totalPages} (${overallAccuracy.toFixed(2)}% success rate)
@@ -566,7 +633,7 @@ async function runBatchEvaluation() {
     console.log(`\nAvailable document range: 1-${validDocuments.length}`);
     
     // Get number of documents to evaluate
-    const numDocsInput = await getUserInput(`\nHow many documents would you like to evaluate? (1-${validDocuments.length}): `);
+    const numDocsInput = await getUserInput(`\nHow many documents would you like to evaluate with batch PDF+OCR? (1-${validDocuments.length}): `);
     const numDocs = parseInt(numDocsInput);
     
     if (isNaN(numDocs) || numDocs < 1 || numDocs > validDocuments.length) {
@@ -574,7 +641,7 @@ async function runBatchEvaluation() {
       process.exit(1);
     }
     
-    console.log(`\n🚀 Starting batch evaluation of ${numDocs} documents...`);
+    console.log(`\n🚀 Starting batch evaluation with PDF+OCR for ${numDocs} documents...`);
     
     // Randomly select documents
     const selectedDocuments = [];
@@ -631,7 +698,7 @@ async function runBatchEvaluation() {
     const sofAccuracy = totalSOFPages > 0 ? (totalCorrectSOFPages / totalSOFPages) * 100 : 0;
     
     // Print summary to console
-    console.log('\n📈 Batch Evaluation Results:');
+    console.log('\n📈 Batch Evaluation Results (Batch PDF + OCR):');
     console.log(`  - Documents Processed: ${successfulDocs}/${numDocs}`);
     console.log(`  - Total Pages Processed: ${totalPages}`);
     console.log(`  - Correctly Classified Pages: ${totalCorrectPages} (${overallAccuracy.toFixed(2)}%)`);
@@ -662,7 +729,7 @@ async function runBatchEvaluation() {
 if (require.main === module) {
   runBatchEvaluation()
     .then(() => {
-      console.log('\n✅ Batch evaluation completed successfully');
+      console.log('\n✅ Batch evaluation with PDF + OCR completed successfully');
     })
     .catch(error => {
       console.error('\n❌ Batch evaluation failed:', error);

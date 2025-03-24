@@ -80,6 +80,8 @@ interface DocumentClassification {
   timestamp: string;
   pages: EnhancedPageClassification[];
   completeText: string; // The entire text content of the document
+  isSOFDocument: boolean; // Flag to indicate if this is an SOF document
+  totalSOFPages: number; // Total number of SOF pages in the document
 }
 
 // Define the SOF extraction result interface
@@ -848,21 +850,6 @@ async function main() {
       page.markdown || page.content || ''
     ).join('\n\n---\n\n');
     
-    // Create final result
-    const result: DocumentClassification = {
-      documentName,
-      totalPages: pages.length,
-      timestamp: new Date().toISOString(),
-      pages: classificationResults,
-      completeText
-    };
-    
-    // Save classification results
-    fs.writeFileSync(
-      path.join(resultsFolder, 'classification_results.json'),
-      JSON.stringify(result, null, 2)
-    );
-    
     // Process SOF pages for extraction
     console.log(`🔍 Identifying SOF pages for extraction...`);
     
@@ -888,7 +875,30 @@ async function main() {
       }
     });
     
+    // Calculate the total number of SOF pages and determine if this is an SOF document
+    const totalSOFPages = masterSofPages.length + agentSofPages.length;
+    const isSOFDocument = totalSOFPages > 0;
+    
     console.log(`📄 Found ${masterSofPages.length} Master SOF pages and ${agentSofPages.length} Agent SOF pages`);
+    console.log(`📊 Document Type: ${isSOFDocument ? 'SOF Document' : 'Non-SOF Document'}`);
+    console.log(`📊 Total SOF Pages: ${totalSOFPages}/${pages.length} (${((totalSOFPages/pages.length)*100).toFixed(2)}%)`);
+    
+    // Create final result with SOF document flag
+    const result: DocumentClassification = {
+      documentName,
+      totalPages: pages.length,
+      timestamp: new Date().toISOString(),
+      pages: classificationResults,
+      completeText,
+      isSOFDocument,
+      totalSOFPages
+    };
+    
+    // Save classification results
+    fs.writeFileSync(
+      path.join(resultsFolder, 'classification_results.json'),
+      JSON.stringify(result, null, 2)
+    );
     
     // Extract SOF events if we have any SOF pages
     let masterSofExtractTable: SofExtractTable | null = null;
@@ -1024,7 +1034,9 @@ async function main() {
     let summary = `# SOF Classification Results\n\n`;
     summary += `Document: ${documentName}\n`;
     summary += `Processed: ${result.timestamp}\n`;
-    summary += `Total Pages: ${result.totalPages}\n\n`;
+    summary += `Total Pages: ${result.totalPages}\n`;
+    summary += `Document Type: ${isSOFDocument ? 'SOF Document' : 'Non-SOF Document'}\n`;
+    summary += `Total SOF Pages: ${totalSOFPages}/${pages.length} (${((totalSOFPages/pages.length)*100).toFixed(2)}%)\n\n`;
     
     summary += `## Page Classifications\n\n`;
     for (let i = 0; i < result.pages.length; i++) {
@@ -1084,13 +1096,21 @@ async function main() {
     .links { margin-top: 15px; }
     .links a { display: block; margin-bottom: 5px; }
     .extraction { background: #f0f7ff; border-radius: 4px; padding: 15px; margin-top: 30px; }
+    .document-info { background: #f0f7ff; border-radius: 4px; padding: 15px; margin-bottom: 20px; }
+    .sof-badge { display: inline-block; padding: 5px 10px; border-radius: 4px; margin-left: 10px; }
+    .sof-document { background: #d4edda; color: #155724; }
+    .non-sof-document { background: #f8d7da; color: #721c24; }
   </style>
 </head>
 <body>
   <h1>SOF Classification Results</h1>
-  <p>Document: ${documentName}<br>
-  Processed: ${result.timestamp}<br>
-  Total Pages: ${result.totalPages}</p>
+  <div class="document-info">
+    <p><strong>Document:</strong> ${documentName}</p>
+    <p><strong>Processed:</strong> ${result.timestamp}</p>
+    <p><strong>Document Type:</strong> <span class="sof-badge ${isSOFDocument ? 'sof-document' : 'non-sof-document'}">${isSOFDocument ? 'SOF Document' : 'Non-SOF Document'}</span></p>
+    <p><strong>Total Pages:</strong> ${result.totalPages}</p>
+    <p><strong>SOF Pages:</strong> ${totalSOFPages}/${pages.length} (${((totalSOFPages/pages.length)*100).toFixed(2)}%)</p>
+  </div>
   
   <h2>Page Classifications</h2>
   <div class="page-grid">

@@ -69,3 +69,12 @@ azure_openai_usage.json
 
 # Local configuration
 .env 
+
+./output
+./results
+./results/*
+
+./output/*output/
+results/
+
+output/
