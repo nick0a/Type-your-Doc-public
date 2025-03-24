@@ -140,7 +140,7 @@ For EACH page, carefully examine both the document text and PDF to determine whi
 3. "OTHER" (Not a Statement of Facts document):
    - Does not match the characteristics of either AGENT_SOF or MASTER_SOF
    - May be an entirely different type of maritime document
-   - IMPORTANT: This category INCLUDES Surveyor Statements of Facts, which are a distinct type of SOF
+   - IMPORTANT: This category INCLUDES Surveyor Statements of Facts, which are a distinct type of SOF 
    - These documents often have names like; CARGO DOCUMENTS, NOTICE OF READINESS, LETTER OF PROTEST DELAYS, LETTER OF PROTEST REFUSAL, LETTER OF PROTEST SLOW LOADING, LETTER OF PROTEST SLOW DISCHARGING, LETTER OF PROTEST FREE PRATIQUE, ULLAGE REPORT, EMPTY TANK CERTIFICATE, PUMPING LOG FIRST, AUTHORISATION BILLS OF LADING, TANK CLEANLINESS CERTIFICATE, LETTER OF PROTEST BERTHING, LETTER OF PROTEST GENERAL, SHIPPING ORDER, CARGO MANIFEST, CONFIRMATION CHANDLERY SUPPLY.
 
 4. "SURVEYOR SOF" (Surveyor's Statement of Facts) - CATEGORIZE THESE AS "OTHER":
