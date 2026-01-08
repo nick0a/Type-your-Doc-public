@@ -15,7 +15,7 @@ The system can use detailed page-level classifications from a CSV file with the 
 
 ```
 original_filename,page_number,category,subcategory
-"1st_berth_V-122_Vessel_Docs-Barquitto1_002_compressed.pdf",1,"Master Documents","Cargo Documents Table of Contents/Front Page"
+"sample.pdf",1,"Master Documents","Cargo Documents Table of Contents/Front Page"
 ...
 ```
 
@@ -31,7 +31,7 @@ npm run create:validation
 
 This will:
 - Read the labeled pages CSV file
-- Match each labeled page with the corresponding document in Agent&MasterSOFs folder
+- Match each labeled page with the corresponding document in the validation documents folder
 - Generate a validation_dataset.csv file in the classification directory
 
 ### 2. Run the Evaluation
@@ -55,7 +55,7 @@ After running the evaluation, detailed reports will be available in:
 ## Adding More Labeled Data
 
 To expand the evaluation dataset:
-1. Create a CSV file with the same format as `labeled-pages-2025-03-22-23-55-52.csv`
+1. Create a CSV file with the same format as `labeled-pages-sample.csv`
 2. Add more document page classifications
 3. Place the CSV file in the project root directory
 4. Run the evaluation with the new file

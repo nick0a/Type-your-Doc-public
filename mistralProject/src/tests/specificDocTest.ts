@@ -22,17 +22,17 @@ const TEMP_DIR = path.join(process.cwd(), 'temp');
 
 // Specific documents to test - selecting files with "SOF" in their names
 const SOF_DOCS = [
-  'SOF - KWINANA (1).pdf',
-  'SOF - HOD.pdf',
-  'SHIP SOF.pdf', 
-  'Master SOF.pdf',
-  'AGENT SOF.pdf'
+  'SOF_SAMPLE_A.pdf',
+  'SOF_SAMPLE_B.pdf',
+  'SHIP_SOF_SAMPLE.pdf',
+  'MASTER_SOF_SAMPLE.pdf',
+  'AGENT_SOF_SAMPLE.pdf'
 ];
 
 // Documents likely not containing SOF tables
 const NON_SOF_DOCS = [
-  '1732714971510-176_Chemroad Echo Recap_Redacted.pdf',
-  '1732779321232-OCP RIDERS LAYTIME TERMS.pdf'
+  'NON_SOF_SAMPLE_A.pdf',
+  'NON_SOF_SAMPLE_B.pdf'
 ];
 
 /**
