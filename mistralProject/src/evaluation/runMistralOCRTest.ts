@@ -384,7 +384,7 @@ async function processDirectory(): Promise<void> {
 async function processRandomDocument(skipPrompts: boolean = false): Promise<void> {
   try {
     // Use the absolute path to avoid any path resolution issues
-    const validationDir = '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/mistralProject/validationData/Agent&MasterSOFs';
+    const validationDir = process.env.VALIDATION_DIR || process.env.VALIDATION_DATASET_DIR || path.join(process.cwd(), 'fixtures', 'documents');
     
     // Check if directory exists
     if (!(await fs.pathExists(validationDir))) {
@@ -521,7 +521,7 @@ async function processValidationDataset(): Promise<void> {
 async function processRandomDocumentWithImageConversion(skipPrompts: boolean = false): Promise<void> {
   try {
     // Use the absolute path to avoid any path resolution issues
-    const validationDir = '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/mistralProject/validationData/Agent&MasterSOFs';
+    const validationDir = process.env.VALIDATION_DIR || process.env.VALIDATION_DATASET_DIR || path.join(process.cwd(), 'fixtures', 'documents');
     
     // Check if directory exists
     if (!(await fs.pathExists(validationDir))) {

@@ -1,7 +1,7 @@
 /**
  * testRealData.ts
  * 
- * This script tests the document processor with real data from the validation dataset.
+ * This script tests the document processor with a synthetic validation dataset.
  */
 
 import * as fs from 'fs';
@@ -18,10 +18,10 @@ const CURRENT_DIR = __dirname;
 const PROJECT_ROOT = path.resolve(CURRENT_DIR, '..');
 
 // Initial paths relative to the project root (these may be updated based on file existence checks)
-let VALIDATION_CSV_PATH = path.join(PROJECT_ROOT, 'validationData', 'validatedDataset.csv');
-let DOCUMENTS_DIR = path.join(PROJECT_ROOT, 'mistralProject', 'validationData', 'Agent&MasterSOFs');
-const OUTPUT_DIR = path.join(PROJECT_ROOT, 'mistralProject', 'output');
-const TEMP_DIR = path.join(OUTPUT_DIR, 'temp');
+let VALIDATION_CSV_PATH = process.env.VALIDATION_CSV_PATH || path.join(PROJECT_ROOT, 'fixtures', 'validatedDataset.csv');
+let DOCUMENTS_DIR = process.env.DOCUMENTS_DIR || path.join(PROJECT_ROOT, 'fixtures', 'documents');
+const OUTPUT_DIR = process.env.OUTPUT_DIR || path.join(PROJECT_ROOT, 'output');
+const TEMP_DIR = process.env.TEMP_DIR || path.join(OUTPUT_DIR, 'temp');
 
 // Print the initial paths for debugging
 console.log('Current directory (script location):', CURRENT_DIR);
@@ -31,58 +31,12 @@ console.log('Project root directory:', PROJECT_ROOT);
 try {
   // Check if the validation CSV exists and try fallback locations if needed
   if (!fs.existsSync(VALIDATION_CSV_PATH)) {
-    console.log('Validation CSV not found at primary location, trying alternate location...');
-    
-    // Try alternate locations in order of preference
-    const alternateLocations = [
-      path.join(PROJECT_ROOT, 'mistralProject', 'validationData', 'validatedDataset.csv'),
-      path.join(PROJECT_ROOT, 'Agent&MasterSOFs', 'validatedDataset.csv')
-    ];
-    
-    let found = false;
-    for (const altPath of alternateLocations) {
-      if (fs.existsSync(altPath)) {
-        console.log('Found validation CSV at alternate location:', altPath);
-        VALIDATION_CSV_PATH = altPath;
-        found = true;
-        break;
-      }
-    }
-    
-    if (!found) {
-      throw new Error(`Could not find validation CSV at any expected location. 
-        Tried: 
-        - ${VALIDATION_CSV_PATH}
-        - ${alternateLocations.join('\n        - ')}`);
-    }
+    throw new Error(`Validation CSV not found at: ${VALIDATION_CSV_PATH}`);
   }
   
   // Check if the documents directory exists and try fallback locations if needed
   if (!fs.existsSync(DOCUMENTS_DIR)) {
-    console.log('Documents directory not found at primary location, trying alternate locations...');
-    
-    // Try alternate locations in order of preference
-    const alternateLocations = [
-      path.join(PROJECT_ROOT, 'Agent&MasterSOFs'),
-      path.join(PROJECT_ROOT, 'validationData', 'Agent&MasterSOFs')
-    ];
-    
-    let found = false;
-    for (const altPath of alternateLocations) {
-      if (fs.existsSync(altPath)) {
-        console.log('Found documents directory at alternate location:', altPath);
-        DOCUMENTS_DIR = altPath;
-        found = true;
-        break;
-      }
-    }
-    
-    if (!found) {
-      throw new Error(`Could not find documents directory at any expected location. 
-        Tried: 
-        - ${DOCUMENTS_DIR}
-        - ${alternateLocations.join('\n        - ')}`);
-    }
+    throw new Error(`Documents directory not found at: ${DOCUMENTS_DIR}`);
   }
   
   // Print the finalized paths after validation

@@ -24,7 +24,7 @@ if (!MISTRAL_API_KEY) {
 }
 
 // Set paths
-const DEFAULT_VALIDATION_DIR = path.join(process.cwd(), 'mistralProject', 'validationData', 'Agent&MasterSOFs');
+const DEFAULT_VALIDATION_DIR = path.join(process.cwd(), 'fixtures', 'documents');
 const VALIDATION_DIR = process.env.VALIDATION_DIR || DEFAULT_VALIDATION_DIR;
 const OUTPUT_DIR = path.join(process.cwd(), 'output');
 

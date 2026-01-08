@@ -18,7 +18,7 @@ console.log("SCRIPT STARTED: runPdf2ImageOcr.ts");
 console.log("======================================");
 
 // Try to find possible issues with the validation path
-const VALIDATION_DATASET_PATH = '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/mistralProject/validationData/Agent&MasterSOFs';
+const VALIDATION_DATASET_PATH = process.env.VALIDATION_DIR || process.env.VALIDATION_DATASET_DIR || path.join(process.cwd(), 'fixtures', 'documents');
 
 console.log("Checking validation path existence:", VALIDATION_DATASET_PATH);
 try {
@@ -33,9 +33,9 @@ try {
 
 // Alternative validation datasets
 const possiblePaths = [
-  '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/Agent&MasterSOFs',
-  '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/mistralProject/Agent&MasterSOFs',
-  '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/doc_classifier/Agent&MasterSOFs',
+  path.join(process.cwd(), 'fixtures', 'documents'),
+  path.join(process.cwd(), 'validationData'),
+  path.join(process.cwd(), 'input')
 ];
 
 console.log("Checking alternative paths:");

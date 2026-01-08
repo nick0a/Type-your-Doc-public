@@ -9,9 +9,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 // Input and output paths
-const VALIDATION_CSV = 'mistralProject/validationData/validatedDataset.csv';
-const DOCUMENTS_DIR = 'mistralProject/validationData/Agent&MasterSOFs';
-const OUTPUT_DIR = 'mistralProject/output';
+const VALIDATION_CSV = process.env.VALIDATION_CSV_PATH || 'fixtures/validatedDataset.csv';
+const DOCUMENTS_DIR = process.env.VALIDATION_DIR || 'fixtures/documents';
+const OUTPUT_DIR = process.env.OUTPUT_DIR || 'output';
 
 // Interface for validation dataset entries
 interface ValidationEntry {

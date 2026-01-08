@@ -10,7 +10,7 @@ import fs from 'fs-extra';
 async function testPdfToImage() {
   try {
     // Path to a test PDF
-    const pdfPath = '/Users/nicholasclarke/mistralPreprocessingForSOFExtract/mistralProject/validationData/Agent&MasterSOFs/MT CHEMROAD DITA - AGENCY SOF UPDATED.pdf';
+    const pdfPath = process.env.PDF_TEST_FILE || path.join(process.cwd(), 'fixtures', 'documents', 'sample.pdf');
     
     // Check if file exists
     if (!await fs.pathExists(pdfPath)) {

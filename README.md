@@ -17,6 +17,11 @@ This project provides simple tools to extract text from documents using Mistral 
 5. Edit the `.env` file and add your API keys:
    - Mistral API key for OCR
    - Anthropic API key for Claude 3.7 classification
+6. (Optional) Install the local git hooks for secret scanning:
+   ```
+   ./scripts/secret-scan.sh
+   git config core.hooksPath .githooks
+   ```
 
 ## JavaScript Version
 
@@ -46,7 +51,7 @@ You can customize the validation directory by setting the VALIDATION_DIR environ
 
 ```
 MISTRAL_API_KEY=your_api_key_here
-VALIDATION_DIR=/path/to/your/documents
+VALIDATION_DIR=fixtures/documents
 ```
 
 ## SOF Classification
@@ -110,3 +115,37 @@ Local files:
 - When using local files, ensure the file exists and you have permission to read it
 - For files with spaces or special characters in the name, enclose the path in quotes
 - Ensure document URLs are publicly accessible 
+
+## Synthetic Fixtures
+
+This repo includes safe, synthetic fixtures under `fixtures/` for testing and demos:
+- `fixtures/documents/sample.pdf`
+- `fixtures/validatedDataset.csv`
+
+Regenerate the sample PDF:
+
+```
+node scripts/generate-synthetic-pdf.js
+```
+
+Recommended environment variables for local testing:
+
+```
+VALIDATION_DIR=fixtures/documents
+VALIDATION_CSV_PATH=fixtures/validatedDataset.csv
+PDF_TEST_FILE=fixtures/documents/sample.pdf
+```
+
+## Secret Scanning
+
+Local pre-commit hook (requires `gitleaks` on your PATH):
+
+```
+git config core.hooksPath .githooks
+```
+
+Manual scan:
+
+```
+./scripts/secret-scan.sh
+```
